@@ -44,9 +44,6 @@ class Handler(BaseHTTPRequestHandler):
         logging.info("POST request,\nPath: %s\nHeaders:\n%s\n\nBody:\n%s\n",
                 str(self.path), str(self.headers), post_data.decode('utf-8'))
 
-        # self._set_response()
-        # self.wfile.write("POST request for {}".format(self.path).encode('utf-8'))
-
         raw_text = json.loads(post_data)
         if len(raw_text["data"]) > 128:
             self._set_json_response()
@@ -78,12 +75,6 @@ def run(server_class=HTTPServer, handler_class=Handler, port=8080):
     logging.info('Stopping httpd...\n')
 
 
-def init(model_dir, gpu):
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu)
-    from tools.inference import NERInferenceService
-    recognizer = NERInferenceService(model_dir)
-
-
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s %(filename)s] %(message)s")
 
@@ -92,5 +83,8 @@ if __name__ == '__main__':
     parser.add_argument('--model_dir', default='/your/model/dir', type=str, help='model dir path')
     parser.add_argument('--gpu', default='0', type=str, help='0')
     opt = parser.parse_args()
-    init(opt.model_dir, opt.gpu)
+
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(opt.gpu)
+    from tools.inference import NERInferenceService
+    recognizer = NERInferenceService(opt.model_dir)
     run(port=opt.port)
