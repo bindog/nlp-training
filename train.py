@@ -31,6 +31,7 @@ import shutil
 from tools import official_tokenization as tokenization, utils
 import numpy as np
 import torch
+import torch.backends.cudnn as cudnn
 import torch.nn.functional as F
 from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
                               TensorDataset)
@@ -250,6 +251,7 @@ def main():
         torch.distributed.init_process_group(backend='nccl')
     logger.info("device: {} num_gpus: {}, distributed training: {}, 16-bits training: {}".format(
         device, num_gpus, bool(args.local_rank != -1), args.fp16))
+    cudnn.benchmark = True
 
     if args.gradient_accumulation_steps < 1:
         raise ValueError("Invalid gradient_accumulation_steps parameter: {}, should be >= 1".format(
