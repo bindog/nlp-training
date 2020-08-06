@@ -1,11 +1,13 @@
+import logging
 import collections
 import os
 import re
 from glob import glob
 
-# import tensorflow as tf
-# import tensorflow.contrib.slim as slim
 import torch
+
+logging.basicConfig(level=logging.INFO, format="[%(asctime)s %(filename)s] %(message)s")
+logger = logging.getLogger(__name__)
 
 
 def check_args(args):
@@ -14,13 +16,13 @@ def check_args(args):
     os.makedirs(args.checkpoint_dir, exist_ok=True)
     with open(args.setting_file, 'wt') as opt_file:
         opt_file.write('------------ Options -------------\n')
-        print('------------ Options -------------')
+        logger.info('------------ Options -------------')
         for k in args.__dict__:
             v = args.__dict__[k]
             opt_file.write('%s: %s\n' % (str(k), str(v)))
-            print('%s: %s' % (str(k), str(v)))
+            logger.info('%s: %s' % (str(k), str(v)))
         opt_file.write('-------------- End ----------------\n')
-        print('------------ End -------------')
+        logger.info('------------ End -------------')
 
     return args
 
@@ -39,7 +41,7 @@ def torch_show_all_params(model, rank=0):
             l *= j
         k = k + l
     if rank == 0:
-        print("Total param num：" + str(k))
+        logger.info("Total param num：" + str(k))
 
 
 # import ipdb
@@ -88,13 +90,13 @@ def init_from_checkpoint(init_checkpoint, tvars=None, rank=0):
         # 显示成功加载的权重
         for t in initialized_variable_names:
             if ":0" not in t:
-                print("Loading weights success: " + t)
+                logger.info("Loading weights success: " + t)
 
         # 显示新的参数
-        print('New parameters:', new_variable_names)
+        logger.info('New parameters:', new_variable_names)
 
         # 显示初始化参数中没用到的参数
-        print('Unused parameters', unused_variable_names)
+        logger.info('Unused parameters', unused_variable_names)
 
 
 def torch_init_model(model, init_checkpoint, delete_module=False):
@@ -126,9 +128,9 @@ def torch_init_model(model, init_checkpoint, delete_module=False):
 
     load(model, prefix='' if hasattr(model, 'bert') else 'bert.')
 
-    print("missing keys:{}".format(missing_keys))
-    print('unexpected keys:{}'.format(unexpected_keys))
-    print('error msgs:{}'.format(error_msgs))
+    logger.info("missing keys:{}".format(missing_keys))
+    logger.info('unexpected keys:{}'.format(unexpected_keys))
+    logger.info('error msgs:{}'.format(error_msgs))
 
 
 def torch_save_model(model, output_dir, scores, max_save_num=1):
@@ -150,4 +152,4 @@ def torch_save_model(model, output_dir, scores, max_save_num=1):
 
     torch.save(model_to_save.state_dict(),
                os.path.join(output_dir, save_prex))
-    print("Saving model checkpoint to %s", output_dir)
+    logger.info("Saving model checkpoint to %s", output_dir)
