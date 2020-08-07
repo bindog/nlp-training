@@ -1024,6 +1024,14 @@ class BertForMultiLabelingClassification(BertPreTrainedModel):
         else:
             return logits
 
+    def freeze_bert_encoder(self):
+        for param in self.bert.parameters():
+            param.requires_grad = False
+
+    def unfreeze_bert_encoder(self):
+        for param in self.bert.parameters():
+            param.requires_grad = True
+
 
 class BertForTokenClassification(BertPreTrainedModel):
     def __init__(self, config, num_labels):

@@ -133,7 +133,7 @@ def eval_loop(args, model, eval_dataloader, label_map):
     all_logits = torch.cat(_all_logits, 0)
     all_labels = torch.cat(_all_labels, 0)
     acc = eval_func(all_logits, all_labels)
-    fpr, tpr, roc_auc_dict = roc_auc(all_logits.numpy(), all_labels.numpy(), len(label_map))
+    # fpr, tpr, roc_auc_dict = roc_auc(all_logits.numpy(), all_labels.numpy(), len(label_map))
     logger.info("Accuracy: " + str(acc))
     # logger.info("FPR: " + str(fpr))
     # logger.info("TPR: " + str(tpr))

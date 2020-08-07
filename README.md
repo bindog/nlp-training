@@ -1,8 +1,8 @@
-# nlp-playground
+# NLP-Task
 
 Modified from [NEZHA](https://github.com/huawei-noah/Pretrained-Language-Model)
 
-## environment
+## Environment
 
 ```bash
 # install python-dev first
@@ -17,7 +17,7 @@ git checkout 4a8c4ac  # some function only in old version apex
 python3 -m pip install -v --no-cache-dir --global-option="--cpp_ext" --global-option="--cuda_ext" . --user
 ```
 
-## run
+## NER Task
 
 ```bash
 #!/bin/bash
@@ -35,4 +35,22 @@ CUDA_VISIBLE_DEVICES=0,1 python3 main_nezha.py \
   --num_train_epochs=10.0 \
   --output_dir=/your/model/output/path
   # --trained_model_dir=/restore/trained/model/path \
+```
+
+## Multilabeling Task
+
+```bash
+#!/bin/bash
+
+CUDA_VISIBLE_DEVICES=0,1 python3 train.py \
+  --task_name=multilabeling \
+  --do_train \
+  --data_dir=/private/multilabeling/dataset \
+  --bert_model=/nezha/pretrained/model/path \
+  --max_seq_length=128 \
+  --train_batch_size=24 \
+  --eval_batch_size=4 \
+  --learning_rate=3e-5  \
+  --num_train_epochs=10.0 \
+  --output_dir=/output/model/path \
 ```
