@@ -9,15 +9,6 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import logging
 
-mapping_dict = {
-    "PER": "人名",
-    "LOC": "地名",
-    "ORG": "组织",
-    "JOB": "组织",
-    "PRO": "产品",
-    "TIME": "时间",
-    "COM": "公司"
-}
 
 global recognizer
 
@@ -52,13 +43,7 @@ class Handler(BaseHTTPRequestHandler):
         else:
             result = recognizer.inference(raw_text["data"])
             self._set_json_response()
-            result_dict = {"status": 200, "msg": "success", "result": []}
-            for r in result:
-                rj = {}
-                rj["entity"] = r[2]
-                rj["type"] = mapping_dict[r[3]]
-                rj["offset"] = [r[0], r[1]]
-                result_dict["result"].append(rj)
+            result_dict = {"status": 200, "msg": "success", "result": result}
             self.wfile.write(json.dumps(result_dict).encode("utf-8"))
 
 
@@ -80,11 +65,15 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Training')
     parser.add_argument('--port', default=8080, type=int, help='http service port number')
+    parser.add_argument('--task', default='ner', type=str, help='model task type')
     parser.add_argument('--model_dir', default='/your/model/dir', type=str, help='model dir path')
     parser.add_argument('--gpu', default='0', type=str, help='0')
     opt = parser.parse_args()
 
     os.environ["CUDA_VISIBLE_DEVICES"] = str(opt.gpu)
-    from tools.inference import NERInferenceService
-    recognizer = NERInferenceService(opt.model_dir)
+    if opt.task == "ner":
+        from tools.inference import NERInferenceService as InferenceService
+    elif opt.task == "multilabeling":
+        from tools.inference import MultiLabelingInferenceService as InferenceService
+    recognizer = InferenceService(opt.model_dir)
     run(port=opt.port)

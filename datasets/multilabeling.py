@@ -27,8 +27,9 @@ def process_chunk(chunk, tokenizer, num_labels=11, max_seq_length=128):
         multilabel = info["multilabel"]
 
         tokens_a = tokenizer.tokenize(raw_text)
-        # TODO we can split the text into more training examples
-        # ...
+
+        # split a long text into small text parts
+        # they all share the same label
         s_index = 0
         e_index = max_seq_length - 2
         while s_index == 0 or len(tokens_a) - s_index > max_seq_length // 2:
