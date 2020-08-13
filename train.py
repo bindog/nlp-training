@@ -58,7 +58,7 @@ def get_model(args, bert_config, num_labels):
         return BertForSequenceClassification(bert_config, num_labels=num_labels)
     elif args.task_name == "multilabeling":
         if args.encode_document:
-            return DocumentBertLSTM(bert_config, args.train_batch_size, num_labels=num_labels)
+            return DocumentBertLSTM(bert_config, args.doc_inner_batch_size, num_labels=num_labels)
         else:
             return BertForMultiLabelingClassification(bert_config, num_labels=num_labels)
     else:
@@ -76,7 +76,7 @@ def get_dataloader(args, tokenizer, num_labels, split):
         pass
     elif args.task_name == "multilabeling":
         from datasets.multilabeling import MultiLabelingDataset
-        dataset = MultiLabelingDataset(json_file, tokenizer, num_labels, args.train_batch_size, args.max_seq_length, args.encode_document)
+        dataset = MultiLabelingDataset(json_file, tokenizer, num_labels, args.doc_inner_batch_size, args.max_seq_length, args.encode_document)
     if args.distributed:
         sampler = DistributedSampler(dataset)
     else:
@@ -142,8 +142,12 @@ def eval_loop(args, model, eval_dataloader, label_map):
     _all_labels = []
     for step, batch in enumerate(tqdm(eval_dataloader, desc="Iteration")):
         batch = tuple(t.cuda() for t in batch)
-        input_ids, input_mask, segment_ids, label_ids = batch
-        logits = model(input_ids, segment_ids, input_mask, None)
+        if args.encode_document:
+            document_batch, label_ids, _ = batch
+            logits = model(document_batch, None)
+        else:
+            input_ids, input_mask, segment_ids, label_ids = batch
+            logits = model(input_ids, segment_ids, input_mask, None)
         _all_logits.append(logits.detach().cpu())
         _all_labels.append(label_ids.detach().cpu())
     all_logits = torch.cat(_all_logits, 0)
@@ -220,6 +224,10 @@ def main():
                         default=8,
                         type=int,
                         help="Total batch size for eval.")
+    parser.add_argument("--doc_inner_batch_size",
+                        default=5,
+                        type=int,
+                        help="batch_size in each doc, enabled if encode_document is True")
     parser.add_argument("--learning_rate",
                         default=5e-5,
                         type=float,

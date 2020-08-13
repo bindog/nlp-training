@@ -158,7 +158,7 @@ def split_chunks(filename, grain=10000):
 
 
 class MultiLabelingDataset(torch.utils.data.Dataset):
-    def __init__(self, json_path, tokenizer, num_labels=None, max_seq_per_doc=24, max_seq_length=128, encode_document=False):
+    def __init__(self, json_path, tokenizer, num_labels=None, max_seq_per_doc=6, max_seq_length=128, encode_document=False):
         """Initiate MultiLabelingDataset dataset.
         Arguments:
             json_path:
