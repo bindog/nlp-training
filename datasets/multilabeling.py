@@ -12,11 +12,63 @@ logging.basicConfig(level=logging.INFO, format="[%(asctime)s %(filename)s] %(mes
 logger = logging.getLogger(__name__)
 
 
-def process_chunk(chunk, tokenizer, num_labels=11, max_seq_length=128):
-    _all_input_ids = []
-    _all_input_mask = []
-    _all_segment_ids = []
-    _all_label_ids = []
+def encode_single_document(document, tokenizer, max_seq_per_doc=24, max_seq_length=128):
+    """
+    Args:
+        document: long document of raw text
+        tokenizer: BERT tokenizer
+        max_seq_per_doc: this should be equal to the batch size of bert model
+        max_seq_length: max_seq_length of BERT model
+    Returns:
+        output: tensor of shape [max_seq_per_doc, 3, max_seq_length], including input_ids, segment_ids, input_mask
+        num_seq_in_doc: real number of sequences in output
+    """
+    tokenized_document = tokenizer.tokenize(document)
+    if len(tokenized_document) / (max_seq_length - 2) > max_seq_per_doc:
+        logger.warn("the length of the document is too large, it will be truncated within length: "
+                    + str(max_seq_per_doc * (max_seq_length - 2)))
+
+    # output = torch.zeros((max_seq_per_doc, 3, max_seq_length), dtype=torch.long)
+    place_holder = ([0] * max_seq_length, [0] * max_seq_length, [0] * max_seq_length)
+    output = [place_holder] * max_seq_per_doc
+
+    num_seq_in_doc = 0
+    for seq_index, i in enumerate(range(0, len(tokenized_document), (max_seq_length - 2))):
+        if seq_index == max_seq_per_doc:
+            break
+
+        raw_tokens = tokenized_document[i: i + (max_seq_length - 2)]
+
+        tokens = ["[CLS]"] + raw_tokens + ["[SEP]"]
+        segment_ids = [0] * len(tokens)
+        input_ids = tokenizer.convert_tokens_to_ids(tokens)
+        input_mask = [1] * len(input_ids)
+
+        # zero-pad up to the sequence length.
+        padding = [0] * (max_seq_length - len(input_ids))
+        input_ids += padding
+        input_mask += padding
+        segment_ids += padding
+
+        assert len(input_ids) == max_seq_length
+        assert len(input_mask) == max_seq_length
+        assert len(segment_ids) == max_seq_length
+
+        output[seq_index] = (input_ids, segment_ids, input_mask)
+        num_seq_in_doc = seq_index
+    return output, num_seq_in_doc + 1
+
+
+def process_chunk(chunk, tokenizer, num_labels=11, max_seq_per_doc=24, max_seq_length=128, encode_document=False):
+    if encode_document:
+        all_document_compose = []
+        all_num_seq_list= []
+        all_label_ids = []
+    else:
+        all_input_ids = []
+        all_input_mask = []
+        all_segment_ids = []
+        all_label_ids = []
     part = chunk.split(b'\n')
     for p in part:
         line = p.decode("utf-8")
@@ -26,43 +78,57 @@ def process_chunk(chunk, tokenizer, num_labels=11, max_seq_length=128):
         raw_text = info["raw"]
         multilabel = info["multilabel"]
 
-        tokens_a = tokenizer.tokenize(raw_text)
-
-        # split a long text into small text parts
-        # they all share the same label
-        s_index = 0
-        e_index = max_seq_length - 2
-        while s_index == 0 or len(tokens_a) - s_index > max_seq_length // 2:
-            tokens_a_i = tokens_a[s_index:e_index]
-            tokens = ["[CLS]"] + tokens_a_i + ["[SEP]"]
-            segment_ids = [0] * len(tokens)
-
-            input_ids = tokenizer.convert_tokens_to_ids(tokens)
-            input_mask = [1] * len(input_ids)
-
-            # Zero-pad up to the sequence length.
-            padding = [0] * (max_seq_length - len(input_ids))
-            input_ids += padding
-            input_mask += padding
-            segment_ids += padding
-
-            assert len(input_ids) == max_seq_length
-            assert len(input_mask) == max_seq_length
-            assert len(segment_ids) == max_seq_length
-
+        if encode_document:
+            output, num_seq_in_doc = encode_single_document(raw_text, tokenizer, max_seq_per_doc, max_seq_length)
+            all_document_compose.append(output)
+            all_num_seq_list.append(num_seq_in_doc)
             label_ids = [1 if i in multilabel else 0 for i in range(num_labels)]
-            _all_input_ids.append(input_ids)
-            _all_input_mask.append(input_mask)
-            _all_segment_ids.append(segment_ids)
-            _all_label_ids.append(label_ids)
+            all_label_ids.append(label_ids)
+        else:
+            tokens_a = tokenizer.tokenize(raw_text)
 
-            s_index = e_index
-            e_index = s_index + max_seq_length - 2
+            # split a long text into small text parts
+            # they all share the same label
+            s_index = 0
+            e_index = max_seq_length - 2
+            while s_index == 0 or len(tokens_a) - s_index > max_seq_length // 2:
+                tokens_a_i = tokens_a[s_index:e_index]
+                tokens = ["[CLS]"] + tokens_a_i + ["[SEP]"]
+                segment_ids = [0] * len(tokens)
 
-    return _all_input_ids, _all_input_mask, _all_segment_ids, _all_label_ids
+                input_ids = tokenizer.convert_tokens_to_ids(tokens)
+                input_mask = [1] * len(input_ids)
+
+                # zero-pad up to the sequence length.
+                padding = [0] * (max_seq_length - len(input_ids))
+                input_ids += padding
+                input_mask += padding
+                segment_ids += padding
+
+                assert len(input_ids) == max_seq_length
+                assert len(input_mask) == max_seq_length
+                assert len(segment_ids) == max_seq_length
+
+                label_ids = [1 if i in multilabel else 0 for i in range(num_labels)]
+                all_input_ids.append(input_ids)
+                all_input_mask.append(input_mask)
+                all_segment_ids.append(segment_ids)
+                all_label_ids.append(label_ids)
+
+                s_index = e_index
+                e_index = s_index + max_seq_length - 2
+
+    if encode_document:
+        return all_document_compose, all_label_ids, all_num_seq_list
+    else:
+        return all_input_ids, all_input_mask, all_segment_ids, all_label_ids
 
 
 def split_chunks(filename, grain=10000):
+    '''
+    using mmap and seek identifier to split whole file into small chunks
+    then use multiprocessing to speed up process
+    '''
     f = open(filename, "r+b")
     s = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
     start = 0
@@ -92,7 +158,7 @@ def split_chunks(filename, grain=10000):
 
 
 class MultiLabelingDataset(torch.utils.data.Dataset):
-    def __init__(self, json_path, num_labels, tokenizer, max_seq_length=128):
+    def __init__(self, json_path, tokenizer, num_labels=None, max_seq_per_doc=24, max_seq_length=128, encode_document=False):
         """Initiate MultiLabelingDataset dataset.
         Arguments:
             json_path:
@@ -101,9 +167,12 @@ class MultiLabelingDataset(torch.utils.data.Dataset):
         """
         super(MultiLabelingDataset, self).__init__()
         self.num_labels = num_labels
+        self.encode_document = encode_document
 
         logger.info("prepare multilabeling dataset from: " + json_path)
         logger.info("number of labels: " + str(num_labels))
+        if self.encode_document:
+            logger.info("using encode document, the long text will be regrad as a document..")
 
         # use mmap and seek to split the huge data file into small chunks
         chunks = split_chunks(json_path, grain=4000)
@@ -112,21 +181,35 @@ class MultiLabelingDataset(torch.utils.data.Dataset):
         pool = Pool(16)
         results = pool.starmap(
             process_chunk,
-            zip(chunks, repeat(tokenizer), repeat(self.num_labels), repeat(max_seq_length))
+            zip(
+                chunks,
+                repeat(tokenizer),
+                repeat(self.num_labels),
+                repeat(max_seq_per_doc),
+                repeat(max_seq_length),
+                repeat(encode_document)
+            )
         )
 
         all_results = []
         for parts in zip(*results):
             all_results.append(list(chain(*parts)))
-
-        self.all_input_ids = torch.tensor(all_results[0], dtype=torch.long)
-        self.all_input_mask = torch.tensor(all_results[1], dtype=torch.long)
-        self.all_segment_ids = torch.tensor(all_results[2], dtype=torch.long)
-        self.all_label_ids = torch.tensor(all_results[3], dtype=torch.long)
+        if encode_document:
+            self.all_document_compose = torch.tensor(all_results[0], dtype=torch.long)
+            self.all_label_ids = torch.tensor(all_results[1], dtype=torch.long)
+            self.all_num_seq_list = torch.tensor(all_results[2], dtype=torch.long)
+        else:
+            self.all_input_ids = torch.tensor(all_results[0], dtype=torch.long)
+            self.all_input_mask = torch.tensor(all_results[1], dtype=torch.long)
+            self.all_segment_ids = torch.tensor(all_results[2], dtype=torch.long)
+            self.all_label_ids = torch.tensor(all_results[3], dtype=torch.long)
         logger.info("multilabeling dataset ready...")
 
     def __getitem__(self, i):
-        return self.all_input_ids[i], self.all_input_mask[i], self.all_segment_ids[i], self.all_label_ids[i]
+        if self.encode_document:
+            return self.all_document_compose[i], self.all_label_ids[i], self.all_num_seq_list[i]
+        else:
+            return self.all_input_ids[i], self.all_input_mask[i], self.all_segment_ids[i], self.all_label_ids[i]
 
     def __len__(self):
-        return len(self.all_input_ids)
+        return len(self.all_label_ids)

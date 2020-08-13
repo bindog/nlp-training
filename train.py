@@ -21,6 +21,7 @@ from __future__ import absolute_import, division, print_function
 import argparse
 import csv
 import json
+import time
 import logging
 import os
 import random
@@ -39,12 +40,11 @@ from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
 
 # from file_utils import PYTORCH_PRETRAINED_BERT_CACHE
-from modeling_nezha import (BertForSequenceClassification, BertForTokenClassification,
+from modeling_nezha import (BertForSequenceClassification, BertForTokenClassification, DocumentBertLSTM,
                             BertForMultiLabelingClassification, BertConfig, WEIGHTS_NAME, CONFIG_NAME)
 from optimization import BertAdam, warmup_linear
 from seqeval.metrics import classification_report
 
-from datasets.multilabeling import MultiLabelingDataset
 
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s %(filename)s] %(message)s")
@@ -57,27 +57,38 @@ def get_model(args, bert_config, num_labels):
     elif args.task_name == "text-clf":
         return BertForSequenceClassification(bert_config, num_labels=num_labels)
     elif args.task_name == "multilabeling":
-        return BertForMultiLabelingClassification(bert_config, num_labels=num_labels)
+        if args.encode_document:
+            return DocumentBertLSTM(bert_config, args.train_batch_size, num_labels=num_labels)
+        else:
+            return BertForMultiLabelingClassification(bert_config, num_labels=num_labels)
     else:
         logger.error("task type not supported!")
         return None
 
 
-def get_dataloader(args, num_labels, tokenizer, split):
+def get_dataloader(args, tokenizer, num_labels, split):
     json_file = os.path.join(args.data_dir, split + ".json")
     if args.task_name == "ner":
-        pass
+        from datasets.ner import NERDataset
+        label_map_path = os.path.join(args.data_dir, "label_map")
+        dataset = NERDataset(json_file, label_map_path, tokenizer, num_labels=num_labels)
     elif args.task_name == "text-clf":
         pass
     elif args.task_name == "multilabeling":
-        dataset = MultiLabelingDataset(json_file, num_labels, tokenizer, args.max_seq_length)
-    shuffle = True if split == "train" else False
+        from datasets.multilabeling import MultiLabelingDataset
+        dataset = MultiLabelingDataset(json_file, tokenizer, num_labels, args.train_batch_size, args.max_seq_length, args.encode_document)
+    if args.distributed:
+        sampler = DistributedSampler(dataset)
+    else:
+        sampler = None
+    shuffle = True if split == "train" and args.distributed == False else False
     batch_size = args.train_batch_size if split == "train" else args.eval_batch_size
     dataloader = DataLoader(
                         dataset,
                         batch_size=batch_size,
                         shuffle=shuffle,
-                        num_workers=4
+                        num_workers=4,
+                        sampler=sampler
                     )
     return len(dataset), dataloader
 
@@ -86,9 +97,14 @@ def train_loop(args, model, train_dataloader, optimizer, num_gpus, global_step):
     model.train()
     for step, batch in enumerate(tqdm(train_dataloader, desc="Iteration")):
         batch = tuple(t.cuda() for t in batch)
-        input_ids, input_mask, segment_ids, label_ids = batch
-        loss = model(input_ids, segment_ids, input_mask, label_ids.float())
-        if num_gpus > 1:
+        if args.encode_document:
+            document_batch, label_ids, _ = batch
+            loss = model(document_batch, label_ids)
+        else:
+            input_ids, input_mask, segment_ids, label_ids = batch
+            loss = model(input_ids, segment_ids, input_mask, label_ids)
+
+        if num_gpus > 1 or args.distributed:
             loss = loss.mean()  # mean() to average on multi-gpu.
         if args.gradient_accumulation_steps > 1:
             loss = loss / args.gradient_accumulation_steps
@@ -148,6 +164,9 @@ def main():
                         type=str,
                         required=True,
                         help="The input data dir. Should contain the .tsv files (or other data files) for the task.")
+    parser.add_argument("--encode_document",
+                        action='store_true',
+                        help="Whether treat the text as document or not")
     parser.add_argument("--bert_model", default=None, type=str, required=False,
                         help="Bert pre-trained model selected in the list: bert-base-uncased, "
                              "bert-large-uncased, bert-base-cased, bert-large-cased, bert-base-multilingual-uncased, "
@@ -239,18 +258,22 @@ def main():
                              "Positive power of 2: static loss scaling value.\n")
     args = parser.parse_args()
 
+    if args.no_cuda:
+        logger.info("can not train without GPU")
+        exit()
 
-    if args.local_rank == -1 or args.no_cuda:
-        device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
+    if args.local_rank == -1:
         num_gpus = torch.cuda.device_count()
+        args.distributed = False
     else:
         torch.cuda.set_device(args.local_rank)
-        device = torch.device("cuda", args.local_rank)
         num_gpus = 1
+        args.distributed = True
         # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
-        torch.distributed.init_process_group(backend='nccl')
-    logger.info("device: {} num_gpus: {}, distributed training: {}, 16-bits training: {}".format(
-        device, num_gpus, bool(args.local_rank != -1), args.fp16))
+        torch.distributed.init_process_group(backend='nccl', init_method='env://')
+        args.world_size = torch.distributed.get_world_size()
+    logger.info("num_gpus: {}, distributed training: {}, 16-bits training: {}".format(
+        num_gpus, bool(args.local_rank != -1), args.fp16))
     cudnn.benchmark = True
 
     if args.gradient_accumulation_steps < 1:
@@ -265,17 +288,18 @@ def main():
     if num_gpus > 0:
         torch.cuda.manual_seed_all(args.seed)
 
-    if os.path.exists(args.output_dir) and os.listdir(args.output_dir) and args.do_train:
-        logger.warn("Output directory ({}) already exists and is not empty.".format(args.output_dir))
-        time.sleep(2)
+    if args.distributed == False or args.local_rank == 0:
+        if os.path.exists(args.output_dir) and os.listdir(args.output_dir) and args.do_train:
+            logger.warn("Output directory ({}) already exists and is not empty.".format(args.output_dir))
+            time.sleep(2)
 
-    if not os.path.exists(args.output_dir):
-        os.makedirs(args.output_dir)
-        # copy vocab.txt from pretrained model dir to output dir
-        if args.bert_model:
-            shutil.copyfile(os.path.join(args.bert_model, "vocab.txt"), os.path.join(args.output_dir, "vocab.txt"))
-        elif args.trained_model_dir and args.trained_model_dir != args.output_dir:
-            shutil.copyfile(os.path.join(args.trained_model_dir, "vocab.txt"), os.path.join(args.output_dir, "vocab.txt"))
+        if not os.path.exists(args.output_dir):
+            os.makedirs(args.output_dir)
+            # copy vocab.txt from pretrained model dir to output dir
+            if args.bert_model:
+                shutil.copyfile(os.path.join(args.bert_model, "vocab.txt"), os.path.join(args.output_dir, "vocab.txt"))
+            elif args.trained_model_dir and args.trained_model_dir != args.output_dir:
+                shutil.copyfile(os.path.join(args.trained_model_dir, "vocab.txt"), os.path.join(args.output_dir, "vocab.txt"))
 
     task_name = args.task_name.lower()
 
@@ -291,14 +315,6 @@ def main():
     logger.info('vocab size is %d' % (len(tokenizer.vocab)))
 
     if args.do_train:
-        # if task_name == 'ner':
-        #     num_labels = len(label_list) + 1
-        #     label_map = {label: i for i, label in enumerate(label_list, 1)}
-        #     label_map[0] = "O"
-        # else:
-        #     num_labels = len(label_list)
-        #     label_map = {label: i for i, label in enumerate(label_list)}
-
         # label_map {id: label, ...}
         with open(os.path.join(args.data_dir, "label_map")) as f:
             label_map = json.loads(f.read().strip())
@@ -315,7 +331,8 @@ def main():
         # label_map_reverse {label: id, ...}
         label_map_reverse = {v: k for k, v in label_map.items()}
 
-        num_examples, train_dataloader = get_dataloader(args, num_labels, tokenizer, "train")
+        # TODO add label_map_reverse into nerdataset
+        num_examples, train_dataloader = get_dataloader(args, tokenizer, num_labels, "train")
 
         num_train_optimization_steps = int(
             num_examples / args.train_batch_size / args.gradient_accumulation_steps) * args.num_train_epochs
@@ -341,16 +358,19 @@ def main():
     if args.fp16:
         model.half()
 
-    model.to(device)
-    if args.local_rank != -1:
-        try:
-            from apex.parallel import DistributedDataParallel as DDP
-        except ImportError:
-            raise ImportError(
-                "Please install apex from https://www.github.com/nvidia/apex to use distributed and fp16 training.")
+    if args.distributed:
+        model.cuda(args.local_rank)
+        from torch.nn.parallel import DistributedDataParallel as DDP
+        model = DDP(model, device_ids=[args.local_rank])
 
-        model = DDP(model)
+        # try:
+        #     from apex.parallel import DistributedDataParallel as DDP
+        # except ImportError:
+        #     raise ImportError(
+        #         "Please install apex from https://www.github.com/nvidia/apex to use distributed and fp16 training.")
+        # model = DDP(model)
     elif num_gpus > 1:
+        model.cuda()
         model = torch.nn.DataParallel(model)
 
     # Prepare optimizer
@@ -394,7 +414,7 @@ def main():
 
             # begin to evaluate
             logger.info("================ running evaluation on dev set ===================")
-            _, eval_dataloader = get_dataloader(args, num_labels, tokenizer, "dev")
+            _, eval_dataloader = get_dataloader(args, tokenizer, num_labels, "dev")
             eval_loop(args, model, eval_dataloader, label_map)
 
             # Save a trained model and the associated configuration
@@ -411,12 +431,12 @@ def main():
     logger.info('%s' % str(args.do_eval))
     if args.do_eval and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
         logger.info("================ running evaluation on dev set ===================")
-        _, eval_dataloader = get_dataloader(args, num_labels, tokenizer, "dev")
+        _, eval_dataloader = get_dataloader(args, tokenizer, num_labels, "dev")
         eval_loop(args, model, eval_dataloader, label_map)
 
     if args.do_test:
         logger.info("================ running evaluation in test set ===================")
-        _, eval_dataloader = get_dataloader(args, num_labels, tokenizer, "test")
+        _, eval_dataloader = get_dataloader(args, tokenizer, num_labels, "test")
         eval_loop(args, model, eval_dataloader, label_map)
 
 if __name__ == "__main__":
