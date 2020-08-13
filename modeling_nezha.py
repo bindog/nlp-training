@@ -1019,7 +1019,10 @@ class BertForMultiLabelingClassification(BertPreTrainedModel):
 
         if labels is not None:
             loss_fct = BCEWithLogitsLoss()
-            loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1, self.num_labels))
+            loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1, self.num_labels).float())
+            # TODO validation this effect
+            # from utils.loss import multilabel_categorical_crossentropy as loss_fct
+            # loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1, self.num_labels))
             return loss
         else:
             return logits
@@ -1031,6 +1034,79 @@ class BertForMultiLabelingClassification(BertPreTrainedModel):
     def unfreeze_bert_encoder(self):
         for param in self.bert.parameters():
             param.requires_grad = True
+
+
+class DocumentBertLSTM(BertPreTrainedModel):
+    def __init__(self, config, bert_batch_size, num_labels):
+        super(DocumentBertLSTM, self).__init__(config)
+        self.bert = BertModel(config)
+        # TODO fix
+        self.bert_batch_size = bert_batch_size
+        self.num_labels = num_labels
+        self.dropout = nn.Dropout(p=config.hidden_dropout_prob)
+        import warnings
+        warnings.filterwarnings('ignore')
+        self.lstm = nn.LSTM(config.hidden_size, config.hidden_size)
+        self.lstm.flatten_parameters()
+        self.classifier = nn.Sequential(
+            nn.Dropout(p=config.hidden_dropout_prob),
+            nn.Linear(config.hidden_size, num_labels),
+            nn.Tanh()
+        )
+
+    def forward(self, document_batch, labels=None):
+        '''
+        Args:
+            document_batch: the output of the encode document function,
+                            shape of document_batch is [num_docs, max_sequences_per_document, 3, max_seq_length=128],
+                            dimension 3 means input_ids, token_type_ids, attention_masks
+        '''
+        # contains all BERT sequences
+        # bert should output a (batch_size, num_sequences, bert_hidden_size)
+        bert_output = torch.zeros(
+                                size=(
+                                    document_batch.shape[0],
+                                    min(document_batch.shape[1], self.bert_batch_size),
+                                    self.bert.config.hidden_size
+                                ),
+                                dtype=torch.float).cuda()
+
+        # only pass through bert_batch_size numbers of inputs into bert.
+        # this means that we are possibly cutting off the last part of documents.
+
+        for doc_id in range(document_batch.shape[0]):
+            bert_output[doc_id][:self.bert_batch_size] = self.dropout(self.bert(document_batch[doc_id][:self.bert_batch_size,0],
+                                            token_type_ids=document_batch[doc_id][:self.bert_batch_size,1],
+                                            attention_mask=document_batch[doc_id][:self.bert_batch_size,2])[1])
+
+        output, (_, _) = self.lstm(bert_output.permute(1,0,2))
+        last_layer = output[-1]
+        logits = self.classifier(last_layer)
+        assert logits.shape[0] == document_batch.shape[0]
+
+        if labels is not None:
+            loss_fct = BCEWithLogitsLoss()
+            loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1, self.num_labels).float())
+            return loss
+        else:
+            return logits
+
+    def freeze_bert_encoder(self):
+        for param in self.bert.parameters():
+            param.requires_grad = False
+
+    def unfreeze_bert_encoder(self):
+        for param in self.bert.parameters():
+            param.requires_grad = True
+
+    def unfreeze_bert_encoder_last_layers(self):
+        for name, param in self.bert.named_parameters():
+            if "encoder.layer.11" in name or "pooler" in name:
+                param.requires_grad = True
+    def unfreeze_bert_encoder_pooler_layer(self):
+        for name, param in self.bert.named_parameters():
+            if "pooler" in name:
+                param.requires_grad = True
 
 
 class BertForTokenClassification(BertPreTrainedModel):
