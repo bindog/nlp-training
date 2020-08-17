@@ -207,7 +207,7 @@ class MultiLabelingDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, i):
         if self.encode_document:
-            return self.all_document_compose[i], self.all_label_ids[i], self.all_num_seq_list[i]
+            return self.all_document_compose[i], self.all_label_ids[i]
         else:
             return self.all_input_ids[i], self.all_input_mask[i], self.all_segment_ids[i], self.all_label_ids[i]
 
