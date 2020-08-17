@@ -29,6 +29,7 @@ import sys
 import time
 import datetime
 import shutil
+from packaging import version
 from tools import official_tokenization as tokenization, utils
 import numpy as np
 import torch
@@ -42,13 +43,27 @@ from tqdm import tqdm, trange
 # from file_utils import PYTORCH_PRETRAINED_BERT_CACHE
 from modeling_nezha import (BertForSequenceClassification, BertForTokenClassification, DocumentBertLSTM,
                             BertForMultiLabelingClassification, BertConfig, WEIGHTS_NAME, CONFIG_NAME)
-from optimization import BertAdam, warmup_linear
-from seqeval.metrics import classification_report
 
-
+from optimization import AdamW, get_linear_schedule_with_warmup
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s %(filename)s] %(message)s")
 logger = logging.getLogger(__name__)
+
+# check fp16 settings
+_use_native_amp = False
+_use_apex = False
+
+# Check if Pytorch version >= 1.6 to switch between Native AMP and Apex
+if version.parse(torch.__version__) < version.parse("1.6"):
+    try:
+        from apex import amp
+        _use_apex = True
+    except ImportError:
+        _use_apex = False
+        logger.error("apex installation is broken and your pytorch version below 1.6, you CAN NOT use fp16!")
+else:
+    _use_native_amp = True
+    from torch.cuda.amp import autocast
 
 
 def get_model(args, bert_config, num_labels):
@@ -64,6 +79,35 @@ def get_model(args, bert_config, num_labels):
     else:
         logger.error("task type not supported!")
         return None
+
+
+def get_optimizer_and_scheduler(args, model, num_training_steps):
+    """
+    Setup the optimizer and the learning rate scheduler.
+    We provide a reasonable default that works well. If you want to use something else, you can pass a tuple in the
+    Trainer's init through :obj:`optimizers`, or subclass and override this method in a subclass.
+    """
+    no_decay = ["bias", "LayerNorm.weight"]
+    optimizer_grouped_parameters = [
+        {
+            "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
+            "weight_decay": args.weight_decay,
+        },
+        {
+            "params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)],
+            "weight_decay": 0.0,
+        },
+    ]
+    optimizer = AdamW(
+        optimizer_grouped_parameters,
+        lr=args.learning_rate,
+        betas=(args.adam_beta1, args.adam_beta2),
+        eps=args.adam_epsilon,
+    )
+    lr_scheduler = get_linear_schedule_with_warmup(
+        optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=num_training_steps
+    )
+    return optimizer, lr_scheduler
 
 
 def get_dataloader(args, tokenizer, num_labels, split):
@@ -93,71 +137,123 @@ def get_dataloader(args, tokenizer, num_labels, split):
     return len(dataset), dataloader
 
 
-def train_loop(args, model, train_dataloader, optimizer, num_gpus, global_step):
+def train_loop(args, model, train_dataloader, optimizer, lr_scheduler, num_gpus, global_step, scaler=None):
     model.train()
-    for step, batch in enumerate(tqdm(train_dataloader, desc="Iteration")):
-        batch = tuple(t.cuda() for t in batch)
-        if args.encode_document:
-            document_batch, label_ids, _ = batch
-            loss = model(document_batch, label_ids)
-        else:
-            input_ids, input_mask, segment_ids, label_ids = batch
-            loss = model(input_ids, segment_ids, input_mask, label_ids)
+    p = tqdm(train_dataloader, desc="Iteration")
+    # for step, batch in enumerate(tqdm(train_dataloader, desc="Iteration")):
+    for step, batch in enumerate(p):
+        inputs = tuple(t.cuda() for t in batch)
 
-        if num_gpus > 1 or args.distributed:
-            loss = loss.mean()  # mean() to average on multi-gpu.
+        # TODO 1: checkout if loss = outputs[0] is correct
+        # TODO 2: use mapping ** or list *, use * first
+        if args.fp16 and _use_native_amp:
+            with autocast():
+                outputs = model(*inputs)
+                loss = outputs[0]
+        else:
+            outputs = model(*inputs)
+            # We don't use .loss here since the model may return tuples instead of ModelOutput.
+            loss = outputs[0]
+
+        if num_gpus > 1:
+            loss = loss.mean()  # mean() to average on multi-gpu parallel training
+
         if args.gradient_accumulation_steps > 1:
             loss = loss / args.gradient_accumulation_steps
 
-        if args.fp16:
-            optimizer.backward(loss)
+        if args.fp16 and _use_native_amp:
+            scaler.scale(loss).backward()
+        elif args.fp16 and _use_apex:
+            with amp.scale_loss(loss, optimizer) as scaled_loss:
+                scaled_loss.backward()
         else:
             loss.backward()
 
         if (step + 1) % args.gradient_accumulation_steps == 0:
-            if args.fp16:
-                # modify learning rate with special warm up BERT uses
-                # if args.fp16 is False, BertAdam is used that handles this automatically
-                lr_this_step = args.learning_rate * warmup_linear(global_step / num_train_optimization_steps,
-                                                                  args.warmup_proportion)
-                for param_group in optimizer.param_groups:
-                    param_group['lr'] = lr_this_step
-            optimizer.step()
-            optimizer.zero_grad()
+            # unscale and clip grad norm
+            if args.fp16 and _use_native_amp:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+            elif args.fp16 and _use_apex:
+                torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_grad_norm)
+            else:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+
+            # model params step
+            if args.fp16 and _use_native_amp:
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
+
+            lr_scheduler.step()
+            model.zero_grad()
             global_step += 1
+
+            if global_step % 10 == 0:
+                p.set_postfix(loss=round(loss.item(), 4))
 
 
 def eval_loop(args, model, eval_dataloader, label_map):
     model.eval()
     eval_func = None
+
     if args.task_name == "ner":
-        pass
+        from seqeval.metrics import classification_report
+        y_true = []
+        y_pred = []
+        for step, batch in enumerate(tqdm(eval_dataloader, desc="Evaluating")):
+            batch = tuple(t.cuda() for t in batch)
+            input_ids, input_mask, segment_ids, label_ids = batch
+
+            with torch.no_grad():
+                logits = model(input_ids, segment_ids, input_mask, None)
+                logits = torch.argmax(F.log_softmax(logits, dim=2), dim=2)
+
+            logits = logits.detach().cpu().numpy()
+            label_ids = label_ids.to('cpu').numpy()
+            for i, label in enumerate(label_ids):
+                temp_1 = []
+                temp_2 = []
+                for j, m in enumerate(label):
+                    if j == 0:
+                        continue
+                    elif label_map_reverse[label_ids[i][j]] == "[SEP]":
+                        y_true.append(temp_1)
+                        y_pred.append(temp_2)
+                        break
+                    else:
+                        temp_1.append(label_map_reverse[label_ids[i][j]])
+                        temp_2.append(label_map_reverse[logits[i][j]])
+
+        report = classification_report(y_true, y_pred, digits=4)
+        logger.info("\n%s", report)
     elif args.task_name == "text-clf":
         pass
     elif args.task_name == "multilabeling":
         from evaluation.multilabeling_eval import accuracy_with_thresh as eval_func
         from evaluation.multilabeling_eval import roc_auc
 
-    _all_logits = []
-    _all_labels = []
-    for step, batch in enumerate(tqdm(eval_dataloader, desc="Iteration")):
-        batch = tuple(t.cuda() for t in batch)
-        if args.encode_document:
-            document_batch, label_ids, _ = batch
-            logits = model(document_batch, None)
-        else:
-            input_ids, input_mask, segment_ids, label_ids = batch
-            logits = model(input_ids, segment_ids, input_mask, None)
-        _all_logits.append(logits.detach().cpu())
-        _all_labels.append(label_ids.detach().cpu())
-    all_logits = torch.cat(_all_logits, 0)
-    all_labels = torch.cat(_all_labels, 0)
-    acc = eval_func(all_logits, all_labels)
-    # fpr, tpr, roc_auc_dict = roc_auc(all_logits.numpy(), all_labels.numpy(), len(label_map))
-    logger.info("Accuracy: " + str(acc))
-    # logger.info("FPR: " + str(fpr))
-    # logger.info("TPR: " + str(tpr))
-    # logger.info("ROC and AUC: " + str(roc_auc_dict))
+        _all_logits = []
+        _all_labels = []
+        for step, batch in enumerate(tqdm(eval_dataloader, desc="Evaluating")):
+            batch = tuple(t.cuda() for t in batch)
+            if args.encode_document:
+                document_batch, label_ids, _ = batch
+                logits = model(document_batch, None)
+            else:
+                input_ids, input_mask, segment_ids, label_ids = batch
+                logits = model(input_ids, segment_ids, input_mask, None)
+            _all_logits.append(logits.detach().cpu())
+            _all_labels.append(label_ids.detach().cpu())
+        all_logits = torch.cat(_all_logits, 0)
+        all_labels = torch.cat(_all_labels, 0)
+        acc = eval_func(all_logits, all_labels)
+        # fpr, tpr, roc_auc_dict = roc_auc(all_logits.numpy(), all_labels.numpy(), len(label_map))
+        logger.info("Accuracy: " + str(acc))
+        # logger.info("FPR: " + str(fpr))
+        # logger.info("TPR: " + str(tpr))
+        # logger.info("ROC and AUC: " + str(roc_auc_dict))
 
 
 def main():
@@ -232,15 +328,39 @@ def main():
                         default=5e-5,
                         type=float,
                         help="The initial learning rate for Adam.")
-    parser.add_argument("--num_train_epochs",
-                        default=3.0,
+    parser.add_argument("--adam_beta1",
+                        default=0.9,
                         type=float,
-                        help="Total number of training epochs to perform.")
+                        help="Beta1 for Adam optimizer")
+    parser.add_argument("--adam_beta2",
+                        default=0.999,
+                        type=float,
+                        help="Beta2 for Adam optimizer")
+    parser.add_argument("--adam_epsilon",
+                        default=1e-8,
+                        type=float,
+                        help="Epsilon for Adam optimizer")
+    parser.add_argument("--max_grad_norm",
+                        default=1.0,
+                        type=float,
+                        help="Max gradient norm")
+    parser.add_argument("--weight_decay",
+                        default=0.0,
+                        type=float,
+                        help="weight decay")
+    parser.add_argument("--warmup_steps",
+                        default=200,
+                        type=int,
+                        help="Number of steps used for a linear warmup from 0 to `learning_rate`")
     parser.add_argument("--warmup_proportion",
                         default=0.1,
                         type=float,
                         help="Proportion of training to perform linear learning rate warmup for. "
                              "E.g., 0.1 = 10%% of training.")
+    parser.add_argument("--num_train_epochs",
+                        default=3.0,
+                        type=float,
+                        help="Total number of training epochs to perform.")
     parser.add_argument("--no_cuda",
                         action='store_true',
                         help="Whether not to use CUDA when available")
@@ -259,6 +379,10 @@ def main():
     parser.add_argument('--fp16',
                         action='store_true',
                         help="Whether to use 16-bit float precision instead of 32-bit")
+    parser.add_argument('--fp16_opt_level',
+                        default="O1",
+                        type=str,
+                        help="apex fp16 optimization level")
     parser.add_argument('--loss_scale',
                         type=float, default=0,
                         help="Loss scaling to improve fp16 numeric stability. Only used when fp16 set to True.\n"
@@ -342,10 +466,8 @@ def main():
         # TODO add label_map_reverse into nerdataset
         num_examples, train_dataloader = get_dataloader(args, tokenizer, num_labels, "train")
 
-        num_train_optimization_steps = int(
-            num_examples / args.train_batch_size / args.gradient_accumulation_steps) * args.num_train_epochs
-        if args.local_rank != -1:
-            num_train_optimization_steps = num_train_optimization_steps // torch.distributed.get_world_size()
+        # total training steps (including multi epochs)
+        num_training_steps = int(len(train_dataloader) // args.gradient_accumulation_steps * args.num_train_epochs)
     else:
         # TODO not train...
         # do some other things
@@ -353,8 +475,8 @@ def main():
 
     if args.trained_model_dir:
         logger.info('init nezha model from user fine-tune model...')
-        config = BertConfig(os.path.join(args.trained_model_dir, 'bert_config.json'))
-        model = get_model(args, config, num_labels=num_labels)
+        bert_config = BertConfig(os.path.join(args.trained_model_dir, 'bert_config.json'))
+        model = get_model(args, bert_config, num_labels=num_labels)
         model.load_state_dict(torch.load(os.path.join(args.trained_model_dir, WEIGHTS_NAME)))
     elif args.bert_model:
         logger.info('init nezha model from original pretrained model...')
@@ -363,54 +485,26 @@ def main():
         utils.torch_show_all_params(model)
         utils.torch_init_model(model, os.path.join(args.bert_model, 'pytorch_model.bin'))
 
-    if args.fp16:
-        model.half()
+    optimizer, lr_scheduler = get_optimizer_and_scheduler(args, model, num_training_steps)
+    scaler = None
+    model = model.cuda()
+    if args.fp16 and _use_apex:
+        logger.error("using apex amp for fp16...")
+        model, optimizer = amp.initialize(model, optimizer, opt_level=args.fp16_opt_level)
+    elif args.fp16 and _use_native_amp:
+        logger.error("using pytorch native amp for fp16...")
+        scaler = torch.cuda.amp.GradScaler()
+    elif args.fp16 and (_use_apex is False and _use_native_amp is False):
+        logger.error("your environment DO NOT support fp16 training...")
+        exit()
 
     if args.distributed:
+        # TODO needs fix here
         model.cuda(args.local_rank)
         from torch.nn.parallel import DistributedDataParallel as DDP
         model = DDP(model, device_ids=[args.local_rank])
-
-        # try:
-        #     from apex.parallel import DistributedDataParallel as DDP
-        # except ImportError:
-        #     raise ImportError(
-        #         "Please install apex from https://www.github.com/nvidia/apex to use distributed and fp16 training.")
-        # model = DDP(model)
     elif num_gpus > 1:
-        model.cuda()
         model = torch.nn.DataParallel(model)
-
-    # Prepare optimizer
-    param_optimizer = list(model.named_parameters())
-    no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
-    optimizer_grouped_parameters = [
-        {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
-        {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
-    ]
-    if args.fp16:
-        try:
-            from apex.optimizers import FP16_Optimizer
-            # from apex.fp16_utils.fp16_optimizer import FP16_Optimizer
-            from apex.optimizers import FusedAdam
-        except ImportError:
-            raise ImportError(
-                "Please install apex from https://www.github.com/nvidia/apex to use distributed and fp16 training.")
-
-        optimizer = FusedAdam(optimizer_grouped_parameters,
-                              lr=args.learning_rate,
-                              bias_correction=False,
-                              max_grad_norm=1.0)
-        if args.loss_scale == 0:
-            optimizer = FP16_Optimizer(optimizer, dynamic_loss_scale=True)
-        else:
-            optimizer = FP16_Optimizer(optimizer, static_loss_scale=args.loss_scale)
-
-    else:
-        optimizer = BertAdam(optimizer_grouped_parameters,
-                             lr=args.learning_rate,
-                             warmup=args.warmup_proportion,
-                             t_total=num_train_optimization_steps)
 
     global_step = 0
     if args.do_train:
@@ -418,7 +512,7 @@ def main():
         num_epoch = 0
         for _ in trange(int(args.num_train_epochs), desc="Epoch"):
             # train loop in one epoch
-            train_loop(args, model, train_dataloader, optimizer, num_gpus, global_step)
+            train_loop(args, model, train_dataloader, optimizer, lr_scheduler, num_gpus, global_step, scaler)
 
             # begin to evaluate
             logger.info("================ running evaluation on dev set ===================")
@@ -435,7 +529,6 @@ def main():
 
             num_epoch += 1
 
-    model.to(device)
     logger.info('%s' % str(args.do_eval))
     if args.do_eval and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
         logger.info("================ running evaluation on dev set ===================")
