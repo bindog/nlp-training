@@ -14,8 +14,10 @@ from tools import official_tokenization as tokenization, utils
 from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
                               TensorDataset)
 
-from modeling_nezha import (BertForSequenceClassification, BertForTokenClassification,
-                            BertForMultiLabelingClassification, BertConfig, WEIGHTS_NAME, CONFIG_NAME)
+from modeling_nezha import (BertForSequenceClassification, BertForTokenClassification, BertForMultiLabelingClassification,
+                            DocumentBertLSTM, BertConfig, WEIGHTS_NAME, CONFIG_NAME)
+
+from datasets.multilabeling import encode_single_document
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
                     datefmt='%m/%d/%Y %H:%M:%S',
@@ -24,23 +26,35 @@ logger = logging.getLogger(__name__)
 
 
 class MultiLabelingInferenceService(object):
-    def __init__(self, model_dir):
+    def __init__(self, model_dir, encode_document=False, doc_inner_batch_size=5, **kwargs):
         with open(os.path.join(model_dir, "label_map")) as f:
             label_map = json.loads(f.read().strip())
             self.label_map = {int(k):v for k, v in label_map.items()}
         num_labels = len(self.label_map)
         self.tokenizer = tokenization.BertTokenizer(vocab_file=os.path.join(model_dir, 'vocab.txt'), do_lower_case=True)
         config = BertConfig(os.path.join(model_dir, 'bert_config.json'))
-        self.model = BertForMultiLabelingClassification(config, num_labels=num_labels)
+
+        self.encode_document = encode_document
+        if encode_document:
+            self.doc_inner_batch_size = doc_inner_batch_size
+            self.model = DocumentBertLSTM(config, doc_inner_batch_size, num_labels)
+        else:
+            self.model = BertForMultiLabelingClassification(config, num_labels=num_labels)
         self.model.load_state_dict(torch.load(os.path.join(model_dir, WEIGHTS_NAME)))
         self.model.cuda()
         self.model.eval()
 
     def input_preprocess(self, text, max_seq_length=128):
-        if len(text) > max_seq_length:
-            # split or other way?
-            pass
+        if self.encode_document:
+            if len(text) > (max_seq_length - 2) * self.doc_inner_batch_size:
+                logger.warn("text too long, we only take the {} words in the beginning...".format((max_seq_length - 2)* self.doc_inner_batch_size))
+            document_compose, num_seq_in_doc = encode_single_document(text, self.tokenizer, self.doc_inner_batch_size, max_seq_length)
+            document_compose = torch.tensor(document_compose, dtype=torch.long).unsqueeze(0)
+            return document_compose,
         else:
+            if len(text) > max_seq_length - 2:
+                logger.warn("text too long, we only take the {} words in the beginning...".format(max_seq_length))
+
             tokens_a = self.tokenizer.tokenize(text)
             tokens_a = tokens_a[:max_seq_length - 2]
             tokens = ["[CLS]"] + tokens_a + ["[SEP]"]
@@ -60,18 +74,18 @@ class MultiLabelingInferenceService(object):
         return labels
 
     def inference(self, text, thresh=0.5):
-        input_ids, input_mask, segment_ids = self.input_preprocess(text)
+        inputs = self.input_preprocess(text)
         with torch.no_grad():
-            input_ids = input_ids.cuda()
-            input_mask = input_mask.cuda()
-            segment_ids = segment_ids.cuda()
-            logits = self.model(input_ids, segment_ids, input_mask)
+            inputs = (t.cuda() for t in inputs)
+            logits = self.model(*inputs)
+            print("debug logits:", logits)
             preds = (logits.detach().cpu().sigmoid() > 0.5).byte().numpy()
+            print("debug preds:", preds)
             return self.parse_label(preds)
 
 
 class NERInferenceService(object):
-    def __init__(self, model_dir):
+    def __init__(self, model_dir, **kwargs):
         label_list = ["O", "B-PER", "I-PER", "B-ORG", "I-ORG", "B-LOC", "I-LOC",
                         "B-PRO", "I-PRO", "B-JOB", "I-JOB", "B-TIME", "I-TIME",
                         "B-COM", "I-COM", "X", "[CLS]", "[SEP]"]
