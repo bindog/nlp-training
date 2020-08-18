@@ -11,6 +11,7 @@ import logging
 
 
 global recognizer
+global task
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -36,7 +37,7 @@ class Handler(BaseHTTPRequestHandler):
                 str(self.path), str(self.headers), post_data.decode('utf-8'))
 
         raw_text = json.loads(post_data)
-        if len(raw_text["data"]) > 128:
+        if task == "ner" and len(raw_text["data"]) > 128:
             self._set_json_response()
             result_dict = {"status": 501, "msg": "max length exceed"}
             self.wfile.write(json.dumps(result_dict).encode("utf-8"))
@@ -66,14 +67,16 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Training')
     parser.add_argument('--port', default=8080, type=int, help='http service port number')
     parser.add_argument('--task', default='ner', type=str, help='model task type')
+    parser.add_argument('--encode_document', action='store_true', help="Whether treat the text as document or not")
     parser.add_argument('--model_dir', default='/your/model/dir', type=str, help='model dir path')
     parser.add_argument('--gpu', default='0', type=str, help='0')
     opt = parser.parse_args()
 
     os.environ["CUDA_VISIBLE_DEVICES"] = str(opt.gpu)
+    task = opt.task
     if opt.task == "ner":
         from tools.inference import NERInferenceService as InferenceService
     elif opt.task == "multilabeling":
         from tools.inference import MultiLabelingInferenceService as InferenceService
-    recognizer = InferenceService(opt.model_dir)
+    recognizer = InferenceService(opt.model_dir, encode_document=opt.encode_document)
     run(port=opt.port)
