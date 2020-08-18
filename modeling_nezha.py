@@ -37,7 +37,7 @@ from file_utils import cached_path
 
 CONFIG_NAME = 'bert_config.json'
 WEIGHTS_NAME = 'pytorch_model.bin'
-logging.basicConfig(level=logging.INFO, format="[%(asctime)s %(filename)s] %(message)s")
+logging.basicConfig(level=logging.INFO, format="[%(asctime)s %(filename)s %(lineno)d] %(message)s")
 logger = logging.getLogger(__name__)
 
 PRETRAINED_MODEL_ARCHIVE_MAP = {
@@ -1073,11 +1073,10 @@ class BertForMultiLabelingClassification(BertPreTrainedModel):
 
 
 class DocumentBertLSTM(BertPreTrainedModel):
-    def __init__(self, config, bert_batch_size, num_labels):
+    def __init__(self, config, doc_inner_batch_size, num_labels):
         super(DocumentBertLSTM, self).__init__(config)
         self.bert = BertModel(config)
-        # TODO fix
-        self.bert_batch_size = bert_batch_size
+        self.doc_inner_batch_size = doc_inner_batch_size
         self.num_labels = num_labels
         self.dropout = nn.Dropout(p=config.hidden_dropout_prob)
         import warnings
@@ -1102,20 +1101,19 @@ class DocumentBertLSTM(BertPreTrainedModel):
         bert_output = torch.zeros(
                                 size=(
                                     document_batch.shape[0],
-                                    min(document_batch.shape[1], self.bert_batch_size),
+                                    min(document_batch.shape[1], self.doc_inner_batch_size),
                                     self.bert.config.hidden_size
                                 ),
                                 dtype=torch.float).cuda()
 
-        # only pass through bert_batch_size numbers of inputs into bert.
+        # only pass through doc_inner_batch_size numbers of inputs into bert.
         # this means that we are possibly cutting off the last part of documents.
 
         for doc_id in range(document_batch.shape[0]):
-            bert_output[doc_id][:self.bert_batch_size] = self.dropout(self.bert(document_batch[doc_id][:self.bert_batch_size,0],
-                                            token_type_ids=document_batch[doc_id][:self.bert_batch_size,1],
-                                            attention_mask=document_batch[doc_id][:self.bert_batch_size,2])[1])
+            bert_output[doc_id][:self.doc_inner_batch_size] = self.dropout(self.bert(document_batch[doc_id][:self.doc_inner_batch_size,0],
+                                            token_type_ids=document_batch[doc_id][:self.doc_inner_batch_size,1],
+                                            attention_mask=document_batch[doc_id][:self.doc_inner_batch_size,2])[1])
 
-        print("debug bert_output data type", bert_output.permute(1, 0, 2).dtype)
         output, (_, _) = self.lstm(bert_output.permute(1,0,2))
         last_layer = output[-1]
         logits = self.classifier(last_layer)

@@ -8,11 +8,11 @@ from multiprocessing import Pool, Process, current_process
 import torch
 from torch.utils.data import Dataset, DataLoader
 
-logging.basicConfig(level=logging.INFO, format="[%(asctime)s %(filename)s] %(message)s")
+logging.basicConfig(level=logging.INFO, format="[%(asctime)s %(filename)s %(lineno)d] %(message)s")
 logger = logging.getLogger(__name__)
 
 
-def encode_single_document(document, tokenizer, max_seq_per_doc=24, max_seq_length=128):
+def encode_single_document(document, tokenizer, max_seq_per_doc=5, max_seq_length=128):
     """
     Args:
         document: long document of raw text
@@ -24,9 +24,9 @@ def encode_single_document(document, tokenizer, max_seq_per_doc=24, max_seq_leng
         num_seq_in_doc: real number of sequences in output
     """
     tokenized_document = tokenizer.tokenize(document)
-    if len(tokenized_document) / (max_seq_length - 2) > max_seq_per_doc:
-        logger.warn("the length of the document is too large, it will be truncated within length: "
-                    + str(max_seq_per_doc * (max_seq_length - 2)))
+    # if len(tokenized_document) / (max_seq_length - 2) > max_seq_per_doc:
+    #     logger.warn("the length of the document is too large, it will be truncated within length: "
+    #                 + str(max_seq_per_doc * (max_seq_length - 2)))
 
     # output = torch.zeros((max_seq_per_doc, 3, max_seq_length), dtype=torch.long)
     place_holder = ([0] * max_seq_length, [0] * max_seq_length, [0] * max_seq_length)
@@ -59,7 +59,7 @@ def encode_single_document(document, tokenizer, max_seq_per_doc=24, max_seq_leng
     return output, num_seq_in_doc + 1
 
 
-def process_chunk(chunk, tokenizer, num_labels=11, max_seq_per_doc=24, max_seq_length=128, encode_document=False):
+def process_chunk(chunk, tokenizer, num_labels=11, max_seq_per_doc=5, max_seq_length=128, encode_document=False):
     if encode_document:
         all_document_compose = []
         all_num_seq_list= []
@@ -75,8 +75,8 @@ def process_chunk(chunk, tokenizer, num_labels=11, max_seq_per_doc=24, max_seq_l
         if len(line) < 6:
             continue
         info = json.loads(line.strip())
-        raw_text = info["raw"]
-        multilabel = info["multilabel"]
+        raw_text = info["text"]
+        multilabel = info["tag"]
 
         if encode_document:
             output, num_seq_in_doc = encode_single_document(raw_text, tokenizer, max_seq_per_doc, max_seq_length)
@@ -172,7 +172,8 @@ class MultiLabelingDataset(torch.utils.data.Dataset):
         logger.info("prepare multilabeling dataset from: " + json_path)
         logger.info("number of labels: " + str(num_labels))
         if self.encode_document:
-            logger.info("using encode document, the long text will be regrad as a document..")
+            max_doc_length = (max_seq_length - 2) * max_seq_per_doc
+            logger.info("encode document enabled, the longest length of a document can be: " + str(max_doc_length))
 
         # use mmap and seek to split the huge data file into small chunks
         chunks = split_chunks(json_path, grain=4000)

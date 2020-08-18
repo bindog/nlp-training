@@ -46,7 +46,7 @@ from modeling_nezha import (BertForSequenceClassification, BertForTokenClassific
 
 from optimization import AdamW, get_linear_schedule_with_warmup
 
-logging.basicConfig(level=logging.INFO, format="[%(asctime)s %(filename)s] %(message)s")
+logging.basicConfig(level=logging.INFO, format="[%(asctime)s %(filename)s %(lineno)d] %(message)s")
 logger = logging.getLogger(__name__)
 
 # check fp16 settings
@@ -73,7 +73,10 @@ def get_model(args, bert_config, num_labels):
         return BertForSequenceClassification(bert_config, num_labels=num_labels)
     elif args.task_name == "multilabeling":
         if args.encode_document:
-            return DocumentBertLSTM(bert_config, args.doc_inner_batch_size, num_labels=num_labels)
+            model = DocumentBertLSTM(bert_config, args.doc_inner_batch_size, num_labels=num_labels)
+            model.freeze_bert_encoder()
+            model.unfreeze_bert_encoder_last_layers()
+            return model
         else:
             return BertForMultiLabelingClassification(bert_config, num_labels=num_labels)
     else:
@@ -239,7 +242,7 @@ def eval_loop(args, model, eval_dataloader, label_map):
         for step, batch in enumerate(tqdm(eval_dataloader, desc="Evaluating")):
             batch = tuple(t.cuda() for t in batch)
             if args.encode_document:
-                document_batch, label_ids, _ = batch
+                document_batch, label_ids = batch
                 logits = model(document_batch, None)
             else:
                 input_ids, input_mask, segment_ids, label_ids = batch
