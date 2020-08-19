@@ -18,17 +18,21 @@
 
 from __future__ import absolute_import, division, print_function
 
-import argparse
-import csv
-import json
-import time
-import logging
 import os
+import argparse
 import random
 import sys
 import time
 import datetime
 import shutil
+import csv
+import json
+import time
+import logging
+
+logging.basicConfig(level=logging.INFO, format="[%(asctime)s %(filename)s %(lineno)d] %(message)s")
+logger = logging.getLogger(__name__)
+
 from packaging import version
 from tools import official_tokenization as tokenization, utils
 import numpy as np
@@ -46,9 +50,6 @@ from modeling_nezha import (BertForSequenceClassification, BertForTokenClassific
                             BertForTagClassification, BertConfig, WEIGHTS_NAME, CONFIG_NAME)
 
 from optimization import AdamW, get_linear_schedule_with_warmup
-
-logging.basicConfig(level=logging.INFO, format="[%(asctime)s %(filename)s %(lineno)d] %(message)s")
-logger = logging.getLogger(__name__)
 
 # check fp16 settings
 _use_native_amp = False
@@ -557,7 +558,6 @@ def main():
 
             num_epoch += 1
 
-    logger.info('%s' % str(args.do_eval))
     if args.do_eval and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
         logger.info("================ running evaluation on dev set ===================")
         _, eval_dataloader = get_dataloader(args, tokenizer, num_labels, "dev")
