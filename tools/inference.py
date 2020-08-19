@@ -25,6 +25,73 @@ logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message
 logger = logging.getLogger(__name__)
 
 
+class TextclfInfercenceService(object):
+    def __init__(self, model_dir, encode_document=False, doc_inner_batch_size=5, tag=False, **kwargs):
+        with open(os.path.join(model_dir, "label_map")) as f:
+            label_map = json.loads(f.read().strip())
+            self.label_map = {int(k):v for k, v in label_map.items()}
+        num_labels = len(self.label_map)
+        self.tokenizer = tokenization.BertTokenizer(vocab_file=os.path.join(model_dir, 'vocab.txt'), do_lower_case=True)
+        config = BertConfig(os.path.join(model_dir, 'bert_config.json'))
+
+        self.encode_document = encode_document
+        self.tag = tag
+        if encode_document:
+            self.doc_inner_batch_size = doc_inner_batch_size
+            self.model = DocumentBertLSTM(config, doc_inner_batch_size, num_labels)
+        else:
+            self.model = BertForMultiLabelingClassification(config, num_labels=num_labels)
+        self.model.load_state_dict(torch.load(os.path.join(model_dir, WEIGHTS_NAME)))
+        self.model.cuda()
+        self.model.eval()
+
+    def input_preprocess(self, text, max_seq_length=128):
+        if self.encode_document:
+            if len(text) > (max_seq_length - 2) * self.doc_inner_batch_size:
+                logger.warn("text too long, we only take the {} words in the beginning...".format((max_seq_length - 2) * self.doc_inner_batch_size))
+            document_compose, num_seq_in_doc = encode_single_document(text, self.tokenizer, self.doc_inner_batch_size, max_seq_length)
+            document_compose = torch.tensor(document_compose, dtype=torch.long).unsqueeze(0)
+            return document_compose,
+        else:
+            if len(text) > max_seq_length - 2:
+                logger.warn("text too long, we only take the {} words in the beginning...".format(max_seq_length))
+
+            tokens_a = self.tokenizer.tokenize(text)
+            tokens_a = tokens_a[:max_seq_length - 2]
+            tokens = ["[CLS]"] + tokens_a + ["[SEP]"]
+            segment_ids = [0] * len(tokens)
+            input_ids = self.tokenizer.convert_tokens_to_ids(tokens)
+            input_mask = [1] * len(input_ids)
+
+            input_ids = torch.tensor([input_ids], dtype=torch.long)
+            input_mask = torch.tensor([input_mask], dtype=torch.long)
+            segment_ids = torch.tensor([segment_ids], dtype=torch.long)
+            return input_ids, input_mask, segment_ids
+
+    def parse_label(self, preds):
+        # single batch inference
+        if self.tag:
+            idx = preds.nonzero()[1]
+            labels = [self.label_map[i] for i in idx]
+            return labels
+        else:
+            return self.label_map[preds]
+
+    def inference(self, text, thresh=0.5):
+        # single batch inference
+        inputs = self.input_preprocess(text)
+        with torch.no_grad():
+            inputs = (t.cuda() for t in inputs)
+            logits = self.model(*inputs)
+            print("debug logits:", logits)
+            if self.tag:
+                preds = (logits.detach().cpu().sigmoid() > 0.5).byte().numpy()
+            else:
+                _, preds = torch.max(logits.detach().cpu(), 1)
+                preds = preds.byte().numpy()[0]
+            return self.parse_label(preds)
+
+
 class MultiLabelingInferenceService(object):
     def __init__(self, model_dir, encode_document=False, doc_inner_batch_size=5, **kwargs):
         with open(os.path.join(model_dir, "label_map")) as f:
@@ -47,7 +114,7 @@ class MultiLabelingInferenceService(object):
     def input_preprocess(self, text, max_seq_length=128):
         if self.encode_document:
             if len(text) > (max_seq_length - 2) * self.doc_inner_batch_size:
-                logger.warn("text too long, we only take the {} words in the beginning...".format((max_seq_length - 2)* self.doc_inner_batch_size))
+                logger.warn("text too long, we only take the {} words in the beginning...".format((max_seq_length - 2) * self.doc_inner_batch_size))
             document_compose, num_seq_in_doc = encode_single_document(text, self.tokenizer, self.doc_inner_batch_size, max_seq_length)
             document_compose = torch.tensor(document_compose, dtype=torch.long).unsqueeze(0)
             return document_compose,
@@ -69,9 +136,12 @@ class MultiLabelingInferenceService(object):
 
     def parse_label(self, preds):
         # for single batch inference
-        idx = preds.nonzero()[1]
-        labels = [self.label_map[i] for i in idx]
-        return labels
+        # idx = preds.nonzero()[1]
+        # labels = [self.label_map[i] for i in idx]
+        # return labels
+        label_t = self.label_map[preds[0]]
+        print("debug labels:", label_t)
+        return [label_t]
 
     def inference(self, text, thresh=0.5):
         inputs = self.input_preprocess(text)
@@ -79,8 +149,9 @@ class MultiLabelingInferenceService(object):
             inputs = (t.cuda() for t in inputs)
             logits = self.model(*inputs)
             print("debug logits:", logits)
-            preds = (logits.detach().cpu().sigmoid() > 0.5).byte().numpy()
-            print("debug preds:", preds)
+            # preds = (logits.detach().cpu().sigmoid() > 0.5).byte().numpy()
+            _, preds = torch.max(logits.detach().cpu(), 1)
+            preds = preds.byte().numpy()
             return self.parse_label(preds)
 
 

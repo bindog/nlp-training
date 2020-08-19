@@ -41,7 +41,8 @@ from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
 
 # from file_utils import PYTORCH_PRETRAINED_BERT_CACHE
-from modeling_nezha import (BertForSequenceClassification, BertForTokenClassification, DocumentBertLSTM,
+from modeling_nezha import (BertForSequenceClassification, BertForTokenClassification,
+                            BertForDocumentClassification, DocumentBertLSTM,
                             BertForMultiLabelingClassification, BertConfig, WEIGHTS_NAME, CONFIG_NAME)
 
 from optimization import AdamW, get_linear_schedule_with_warmup
@@ -69,8 +70,14 @@ else:
 def get_model(args, bert_config, num_labels):
     if args.task_name == "ner":
         return BertForTokenClassification(bert_config, num_labels=num_labels)
-    elif args.task_name == "text-clf":
-        return BertForSequenceClassification(bert_config, num_labels=num_labels)
+    elif args.task_name == "textclf":
+        if args.encode_document:
+            model = BertForDocumentClassification(bert_config, args.doc_inner_batch_size, num_labels=num_labels)
+            model.freeze_bert_encoder()
+            model.unfreeze_bert_encoder_last_layers()
+            return model
+        else:
+            return BertForSequenceClassification(bert_config, num_labels=num_labels)
     elif args.task_name == "multilabeling":
         if args.encode_document:
             model = DocumentBertLSTM(bert_config, args.doc_inner_batch_size, num_labels=num_labels)
@@ -119,8 +126,9 @@ def get_dataloader(args, tokenizer, num_labels, split):
         from datasets.ner import NERDataset
         label_map_path = os.path.join(args.data_dir, "label_map")
         dataset = NERDataset(json_file, label_map_path, tokenizer, num_labels=num_labels)
-    elif args.task_name == "text-clf":
-        pass
+    elif args.task_name == "textclf":
+        from datasets.textclf import TextclfDataset
+        dataset = TextclfDataset(json_file, tokenizer, num_labels, args.doc_inner_batch_size, args.max_seq_length, args.encode_document)
     elif args.task_name == "multilabeling":
         from datasets.multilabeling import MultiLabelingDataset
         dataset = MultiLabelingDataset(json_file, tokenizer, num_labels, args.doc_inner_batch_size, args.max_seq_length, args.encode_document)
@@ -143,7 +151,6 @@ def get_dataloader(args, tokenizer, num_labels, split):
 def train_loop(args, model, train_dataloader, optimizer, lr_scheduler, num_gpus, global_step, scaler=None):
     model.train()
     p = tqdm(train_dataloader, desc="Iteration")
-    # for step, batch in enumerate(tqdm(train_dataloader, desc="Iteration")):
     for step, batch in enumerate(p):
         inputs = tuple(t.cuda() for t in batch)
 
@@ -231,8 +238,25 @@ def eval_loop(args, model, eval_dataloader, label_map):
 
         report = classification_report(y_true, y_pred, digits=4)
         logger.info("\n%s", report)
-    elif args.task_name == "text-clf":
-        pass
+    elif args.task_name == "textclf":
+        _all_logits = []
+        _all_labels = []
+        for step, batch in enumerate(tqdm(eval_dataloader, desc="Evaluating")):
+            batch = tuple(t.cuda() for t in batch)
+            if args.encode_document:
+                document_batch, label_ids = batch
+                logits = model(document_batch, None)
+            else:
+                input_ids, input_mask, segment_ids, label_ids = batch
+                logits = model(input_ids, segment_ids, input_mask, None)
+            _all_logits.append(logits.detach().cpu())
+            _all_labels.append(label_ids.detach().cpu())
+        all_logits = torch.cat(_all_logits, 0)
+        all_labels = torch.cat(_all_labels, 0)
+        _, preds = torch.max(all_logits.data, 1)
+        acc = np.mean((preds.byte() == all_labels.byte()).float().numpy())
+        logger.info("Accuracy: " + str(acc))
+
     elif args.task_name == "multilabeling":
         from evaluation.multilabeling_eval import accuracy_with_thresh as eval_func
         from evaluation.multilabeling_eval import roc_auc
@@ -468,6 +492,8 @@ def main():
 
         # TODO add label_map_reverse into nerdataset
         num_examples, train_dataloader = get_dataloader(args, tokenizer, num_labels, "train")
+        # TODO add control flag
+        _, eval_dataloader = get_dataloader(args, tokenizer, num_labels, "dev")
 
         # total training steps (including multi epochs)
         num_training_steps = int(len(train_dataloader) // args.gradient_accumulation_steps * args.num_train_epochs)
@@ -519,7 +545,6 @@ def main():
 
             # begin to evaluate
             logger.info("================ running evaluation on dev set ===================")
-            _, eval_dataloader = get_dataloader(args, tokenizer, num_labels, "dev")
             eval_loop(args, model, eval_dataloader, label_map)
 
             # Save a trained model and the associated configuration
