@@ -13,7 +13,9 @@ and the pretty print version here:
     "entity": [[start_index, end_index, start_tag, inner_tag], [...]],
     "tag": [1,2,7],
     "category": 4,
-    "sentiment": [[entity_name, score], [...]]
+    "sentiment": [[entity_name, pos_score, neg_score], [...]],
+    "summary": "news summary",
+    "keyword": ["keyword", score]
 }
 ```
 
@@ -28,6 +30,8 @@ a simple demo
     "entity": [[0, 2, "B-TIME", "I-TIME"], [6, 8, "B-LOC", "I-LOC"], [...]],
     "tag": [2, 6],
     "category": 5,
-    "sentiment": [["上海", 5]]
+    "sentiment": [["上海", 0.52, 0.48]],
+    "summary": "上海气温达38.6℃再冲新高",
+    "keyword": [["上海", 1.00], ["高温", 0.97]]
 }
 ```
