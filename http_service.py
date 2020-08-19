@@ -69,6 +69,7 @@ if __name__ == '__main__':
     parser.add_argument('--task', default='ner', type=str, help='model task type')
     parser.add_argument('--encode_document', action='store_true', help="Whether treat the text as document or not")
     parser.add_argument('--doc_inner_batch_size', default=10, type=int, help="the bert batch size inside a document")
+    parser.add_argument('--tag', action='store_true', help="normal text classification or tag classification")
     parser.add_argument('--model_dir', default='/your/model/dir', type=str, help='model dir path')
     parser.add_argument('--gpu', default='0', type=str, help='0')
     opt = parser.parse_args()
@@ -77,9 +78,12 @@ if __name__ == '__main__':
     task = opt.task
     if opt.task == "ner":
         from tools.inference import NERInferenceService as InferenceService
-    elif opt.task == "textclf":
+    elif opt.task == "textclf" or opt.task == "tag":
         from tools.inference import TextclfInfercenceService as InferenceService
-    elif opt.task == "multilabeling":
-        from tools.inference import MultiLabelingInferenceService as InferenceService
-    recognizer = InferenceService(opt.model_dir, encode_document=opt.encode_document, doc_inner_batch_size=opt.doc_inner_batch_size)
+    recognizer = InferenceService(
+                            opt.model_dir,
+                            encode_document=opt.encode_document,
+                            doc_inner_batch_size=opt.doc_inner_batch_size,
+                            tag=opt.tag
+                        )
     run(port=opt.port)

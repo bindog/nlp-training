@@ -42,8 +42,8 @@ from tqdm import tqdm, trange
 
 # from file_utils import PYTORCH_PRETRAINED_BERT_CACHE
 from modeling_nezha import (BertForSequenceClassification, BertForTokenClassification,
-                            BertForDocumentClassification, DocumentBertLSTM,
-                            BertForMultiLabelingClassification, BertConfig, WEIGHTS_NAME, CONFIG_NAME)
+                            BertForDocumentClassification, BertForDocumentTagClassification,
+                            BertForTagClassification, BertConfig, WEIGHTS_NAME, CONFIG_NAME)
 
 from optimization import AdamW, get_linear_schedule_with_warmup
 
@@ -78,14 +78,14 @@ def get_model(args, bert_config, num_labels):
             return model
         else:
             return BertForSequenceClassification(bert_config, num_labels=num_labels)
-    elif args.task_name == "multilabeling":
+    elif args.task_name == "tag":
         if args.encode_document:
-            model = DocumentBertLSTM(bert_config, args.doc_inner_batch_size, num_labels=num_labels)
+            model = BertForDocumentTagClassification(bert_config, args.doc_inner_batch_size, num_labels=num_labels)
             model.freeze_bert_encoder()
             model.unfreeze_bert_encoder_last_layers()
             return model
         else:
-            return BertForMultiLabelingClassification(bert_config, num_labels=num_labels)
+            return BertForTagClassification(bert_config, num_labels=num_labels)
     else:
         logger.error("task type not supported!")
         return None
@@ -129,9 +129,9 @@ def get_dataloader(args, tokenizer, num_labels, split):
     elif args.task_name == "textclf":
         from datasets.textclf import TextclfDataset
         dataset = TextclfDataset(json_file, tokenizer, num_labels, args.doc_inner_batch_size, args.max_seq_length, args.encode_document)
-    elif args.task_name == "multilabeling":
-        from datasets.multilabeling import MultiLabelingDataset
-        dataset = MultiLabelingDataset(json_file, tokenizer, num_labels, args.doc_inner_batch_size, args.max_seq_length, args.encode_document)
+    elif args.task_name == "tag":
+        from datasets.textclf import TextclfDataset
+        dataset = TextclfDataset(json_file, tokenizer, num_labels, args.doc_inner_batch_size, args.max_seq_length, args.encode_document, tag=True)
     if args.distributed:
         sampler = DistributedSampler(dataset)
     else:
@@ -257,9 +257,9 @@ def eval_loop(args, model, eval_dataloader, label_map):
         acc = np.mean((preds.byte() == all_labels.byte()).float().numpy())
         logger.info("Accuracy: " + str(acc))
 
-    elif args.task_name == "multilabeling":
-        from evaluation.multilabeling_eval import accuracy_with_thresh as eval_func
-        from evaluation.multilabeling_eval import roc_auc
+    elif args.task_name == "tag":
+        from evaluation.tag_eval import accuracy_with_thresh as eval_func
+        from evaluation.tag_eval import roc_auc
 
         _all_logits = []
         _all_labels = []
