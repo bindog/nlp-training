@@ -74,16 +74,18 @@ def get_model(args, bert_config, num_labels):
     elif args.task_name == "textclf":
         if args.encode_document:
             model = BertForDocumentClassification(bert_config, args.doc_inner_batch_size, num_labels=num_labels)
-            model.freeze_bert_encoder()
-            model.unfreeze_bert_encoder_last_layers()
+            if args.freeze_bert_encoder:
+                model.freeze_bert_encoder()
+                model.unfreeze_bert_encoder_last_layers()
             return model
         else:
             return BertForSequenceClassification(bert_config, num_labels=num_labels)
     elif args.task_name == "tag":
         if args.encode_document:
             model = BertForDocumentTagClassification(bert_config, args.doc_inner_batch_size, num_labels=num_labels)
-            model.freeze_bert_encoder()
-            model.unfreeze_bert_encoder_last_layers()
+            if args.freeze_bert_encoder:
+                model.freeze_bert_encoder()
+                model.unfreeze_bert_encoder_last_layers()
             return model
         else:
             return BertForTagClassification(bert_config, num_labels=num_labels)
@@ -389,6 +391,9 @@ def main():
                         default=3.0,
                         type=float,
                         help="Total number of training epochs to perform.")
+    parser.add_argument("--freeze_bert_encoder",
+                        action='store_true',
+                        help="Whether not to train bert encoder")
     parser.add_argument("--no_cuda",
                         action='store_true',
                         help="Whether not to use CUDA when available")
