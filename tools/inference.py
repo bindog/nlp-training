@@ -52,6 +52,9 @@ class TextclfInfercenceService(object):
         self.model.cuda()
         self.model.eval()
 
+    def get_label_map(self):
+        return self.label_map
+
     def input_preprocess(self, text, max_seq_length=128):
         if self.encode_document:
             if len(text) > (max_seq_length - 2) * self.doc_inner_batch_size:
@@ -84,7 +87,7 @@ class TextclfInfercenceService(object):
         else:
             return self.label_map[preds]
 
-    def inference(self, text, thresh=0.5):
+    def inference(self, text, thresh=0.5, parse_label=True):
         # single batch inference
         inputs = self.input_preprocess(text)
         with torch.no_grad():
@@ -92,11 +95,14 @@ class TextclfInfercenceService(object):
             logits = self.model(*inputs)
             print("debug logits:", logits)
             if self.tag:
-                preds = (logits.detach().cpu().sigmoid() > 0.5).byte().numpy()
+                preds = (logits.detach().cpu().sigmoid() > thresh).byte().numpy()
             else:
                 _, preds = torch.max(logits.detach().cpu(), 1)
                 preds = preds.byte().numpy()[0]
-            return self.parse_label(preds)
+            if parse_label:
+                return self.parse_label(preds)
+            else:
+                return preds
 
 
 class NERInferenceService(object):
