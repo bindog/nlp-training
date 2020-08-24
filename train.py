@@ -45,9 +45,9 @@ from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
 
 # from file_utils import PYTORCH_PRETRAINED_BERT_CACHE
-from modeling_nezha import (BertForSequenceClassification, BertForTokenClassification,
-                            BertForDocumentClassification, BertForDocumentTagClassification,
-                            BertForTagClassification, BertConfig, WEIGHTS_NAME, CONFIG_NAME)
+from models.modeling_nezha import (NeZhaForSequenceClassification, NeZhaForTokenClassification,
+                            NeZhaForDocumentClassification, NeZhaForDocumentTagClassification,
+                            NeZhaForTagClassification, NeZhaConfig, WEIGHTS_NAME, CONFIG_NAME)
 
 from optimization import AdamW, get_linear_schedule_with_warmup
 
@@ -70,25 +70,25 @@ else:
 
 def get_model(args, bert_config, num_labels):
     if args.task_name == "ner":
-        return BertForTokenClassification(bert_config, num_labels=num_labels)
+        return NeZhaForTokenClassification(bert_config, num_labels=num_labels)
     elif args.task_name == "textclf":
         if args.encode_document:
-            model = BertForDocumentClassification(bert_config, args.doc_inner_batch_size, num_labels=num_labels)
+            model = NeZhaForDocumentClassification(bert_config, args.doc_inner_batch_size, num_labels=num_labels)
             if args.freeze_bert_encoder:
                 model.freeze_bert_encoder()
                 model.unfreeze_bert_encoder_last_layers()
             return model
         else:
-            return BertForSequenceClassification(bert_config, num_labels=num_labels)
+            return NeZhaForSequenceClassification(bert_config, num_labels=num_labels)
     elif args.task_name == "tag":
         if args.encode_document:
-            model = BertForDocumentTagClassification(bert_config, args.doc_inner_batch_size, num_labels=num_labels)
+            model = NeZhaForDocumentTagClassification(bert_config, args.doc_inner_batch_size, num_labels=num_labels)
             if args.freeze_bert_encoder:
                 model.freeze_bert_encoder()
                 model.unfreeze_bert_encoder_last_layers()
             return model
         else:
-            return BertForTagClassification(bert_config, num_labels=num_labels)
+            return NeZhaForTagClassification(bert_config, num_labels=num_labels)
     else:
         logger.error("task type not supported!")
         return None
@@ -510,13 +510,13 @@ def main():
 
     if args.trained_model_dir:
         logger.info('init nezha model from user fine-tune model...')
-        bert_config = BertConfig(os.path.join(args.trained_model_dir, 'bert_config.json'))
-        model = get_model(args, bert_config, num_labels=num_labels)
+        config = NeZhaConfig().from_json_file(os.path.join(args.trained_model_dir, 'bert_config.json'))
+        model = get_model(args, config, num_labels=num_labels)
         model.load_state_dict(torch.load(os.path.join(args.trained_model_dir, WEIGHTS_NAME)))
     elif args.bert_model:
         logger.info('init nezha model from original pretrained model...')
-        bert_config = BertConfig.from_json_file(os.path.join(args.bert_model, 'bert_config.json'))
-        model = get_model(args, bert_config, num_labels=num_labels)
+        config = NeZhaConfig().from_json_file(os.path.join(args.bert_model, 'bert_config.json'))
+        model = get_model(args, config, num_labels=num_labels)
         utils.torch_show_all_params(model)
         utils.torch_init_model(model, os.path.join(args.bert_model, 'pytorch_model.bin'))
 
