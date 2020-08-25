@@ -541,18 +541,18 @@ class NeZhaForDocumentClassification(BertPreTrainedModel):
             nn.Linear(hidden_dimension, num_labels),
         )
 
-    def forward(self, document_batch, labels=None):
+    def forward(self, document_compose, labels=None):
         '''
         Args:
-            document_batch: the output of the encode document function,
-                            shape of document_batch is [num_docs, max_sequences_per_document, 3, max_seq_length=128],
+            document_compose: the output of the encode document function,
+                            shape of document_compose is [num_docs, max_sequences_per_document, 3, max_seq_length=128],
                             dimension 3 means input_ids, token_type_ids, attention_masks
         '''
         # contains all BERT sequences
         # bert should output a (batch_size, num_sequences, bert_hidden_size)
         bert_output = torch.zeros(
                                 size=(
-                                    document_batch.shape[0],
+                                    document_compose.shape[0],
                                     self.doc_inner_batch_size,
                                     self.bert.config.hidden_size
                                 ),
@@ -560,18 +560,18 @@ class NeZhaForDocumentClassification(BertPreTrainedModel):
 
         # only pass through doc_inner_batch_size numbers of inputs into bert.
         # this means that we are possibly cutting off the last part of documents.
-        for doc_id in range(document_batch.shape[0]):
+        for doc_id in range(document_compose.shape[0]):
             _, pooled_output = self.bert(
-                                    input_ids=document_batch[doc_id][:, 0],
-                                    token_type_ids=document_batch[doc_id][:, 1],
-                                    attention_mask=document_batch[doc_id][:, 2]
+                                    input_ids=document_compose[doc_id][:, 0],
+                                    token_type_ids=document_compose[doc_id][:, 1],
+                                    attention_mask=document_compose[doc_id][:, 2]
                                 )
             bert_output[doc_id] = self.dropout(pooled_output)
 
         output, (_, _) = self.gru(bert_output.permute(1,0,2))
         last_layer = output[-1]
         logits = self.classifier(last_layer)
-        assert logits.shape[0] == document_batch.shape[0]
+        assert logits.shape[0] == document_compose.shape[0]
 
         if labels is not None:
             loss_fct = CrossEntropyLoss()
@@ -645,18 +645,18 @@ class NeZhaForDocumentTagClassification(BertPreTrainedModel):
             nn.Tanh()
         )
 
-    def forward(self, document_batch, labels=None):
+    def forward(self, document_compose, labels=None):
         '''
         Args:
-            document_batch: the output of the encode document function,
-                            shape of document_batch is [num_docs, max_sequences_per_document, 3, max_seq_length=128],
+            document_compose: the output of the encode document function,
+                            shape of document_compose is [num_docs, max_sequences_per_document, 3, max_seq_length=128],
                             dimension 3 means input_ids, token_type_ids, attention_masks
         '''
         # contains all BERT sequences
         # bert should output a (batch_size, num_sequences, bert_hidden_size)
         bert_output = torch.zeros(
                                 size=(
-                                    document_batch.shape[0],
+                                    document_compose.shape[0],
                                     self.doc_inner_batch_size,
                                     self.bert.config.hidden_size
                                 ),
@@ -664,18 +664,18 @@ class NeZhaForDocumentTagClassification(BertPreTrainedModel):
 
         # only pass through doc_inner_batch_size numbers of inputs into bert.
         # this means that we are possibly cutting off the last part of documents.
-        for doc_id in range(document_batch.shape[0]):
+        for doc_id in range(document_compose.shape[0]):
             _, pooled_output = self.bert(
-                                    input_ids=document_batch[doc_id][:, 0],
-                                    token_type_ids=document_batch[doc_id][:, 1],
-                                    attention_mask=document_batch[doc_id][:, 2]
+                                    input_ids=document_compose[doc_id][:, 0],
+                                    token_type_ids=document_compose[doc_id][:, 1],
+                                    attention_mask=document_compose[doc_id][:, 2]
                                 )
             bert_output[doc_id] = self.dropout(pooled_output)
 
         output, (_, _) = self.lstm(bert_output.permute(1,0,2))
         last_layer = output[-1]
         logits = self.classifier(last_layer)
-        assert logits.shape[0] == document_batch.shape[0]
+        assert logits.shape[0] == document_compose.shape[0]
 
         if labels is not None:
             loss_fct = BCEWithLogitsLoss()
