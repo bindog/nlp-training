@@ -1218,7 +1218,7 @@ class LongformerForSequenceClassification(BertPreTrainedModel):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         if global_attention_mask is None:
-            logger.info("Initializing global attention on CLS token...")
+            # logger.info("Initializing global attention on CLS token...")
             global_attention_mask = torch.zeros_like(input_ids)
             # global attention on cls token
             global_attention_mask[:, 0] = 1
@@ -1254,6 +1254,10 @@ class LongformerForSequenceClassification(BertPreTrainedModel):
         return SequenceClassifierOutput(
             loss=loss, logits=logits, hidden_states=outputs.hidden_states, attentions=outputs.attentions,
         )
+
+    def freeze_encoder(self):
+        for param in self.longformer.parameters():
+            param.requires_grad = False
 
 
 class LongformerClassificationHead(nn.Module):

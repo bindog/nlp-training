@@ -68,18 +68,50 @@ else:
     from torch.cuda.amp import autocast
 
 
+def get_tokenizer(args):
+    if args.model_name == "nezha":
+        if args.bert_model:
+            tokenizer = tokenization.BertTokenizer(vocab_file=os.path.join(args.bert_model, 'vocab.txt'),
+                                                   do_lower_case=True)
+        elif args.trained_model_dir:
+            tokenizer = tokenization.BertTokenizer(vocab_file=os.path.join(args.trained_model_dir, 'vocab.txt'),
+                                                   do_lower_case=True)
+        else:
+            logger.error("BERT vocab file not set, please check your ber_model_dir or trained_model_dir")
+        logger.info('vocab size is %d' % (len(tokenizer.vocab)))
+    elif args.model_name == "longformer":
+        from models.tokenization_longformer import LongformerTokenizer
+        tokenizer = LongformerTokenizer.from_pretrained("allenai/longformer-base-4096")
+    else:
+        logger.error("can not find the proper tokenizer type...")
+    return tokenizer
+
+
 def get_model(args, bert_config, num_labels):
     if args.task_name == "ner":
         return NeZhaForTokenClassification(bert_config, num_labels=num_labels)
     elif args.task_name == "textclf":
-        if args.encode_document:
-            model = NeZhaForDocumentClassification(bert_config, args.doc_inner_batch_size, num_labels=num_labels)
-            if args.freeze_bert_encoder:
-                model.freeze_bert_encoder()
-                model.unfreeze_bert_encoder_last_layers()
+        if args.model_name == "longformer":
+            from models.configuration_longformer import LongformerConfig
+            from models.modeling_longformer import LongformerForSequenceClassification
+            config = LongformerConfig.from_pretrained("allenai/longformer-base-4096")
+            config.num_labels = num_labels
+            model = LongformerForSequenceClassification(config)
+            model.from_pretrained("allenai/longformer-base-4096")
+            model.freeze_encoder()
             return model
+        elif args.model_name == "nezha":
+            if args.encode_document:
+                model = NeZhaForDocumentClassification(bert_config, args.doc_inner_batch_size, num_labels=num_labels)
+                if args.freeze_bert_encoder:
+                    model.freeze_bert_encoder()
+                    model.unfreeze_bert_encoder_last_layers()
+                return model
+            else:
+                return NeZhaForSequenceClassification(bert_config, num_labels=num_labels)
         else:
-            return NeZhaForSequenceClassification(bert_config, num_labels=num_labels)
+            logger.error("can not find the proper model type...")
+            return None
     elif args.task_name == "tag":
         if args.encode_document:
             model = NeZhaForDocumentTagClassification(bert_config, args.doc_inner_batch_size, num_labels=num_labels)
@@ -130,11 +162,12 @@ def get_dataloader(args, tokenizer, num_labels, split):
         label_map_path = os.path.join(args.data_dir, "label_map")
         dataset = NERDataset(json_file, label_map_path, tokenizer, num_labels=num_labels)
     elif args.task_name == "textclf":
+        longformer = True if args.model_name == "longformer" else False
         from datasets.textclf import TextclfDataset
-        dataset = TextclfDataset(json_file, tokenizer, num_labels, args.doc_inner_batch_size, args.max_seq_length, args.encode_document)
+        dataset = TextclfDataset(json_file, tokenizer, num_labels, args.doc_inner_batch_size, args.max_seq_length, args.encode_document, longformer)
     elif args.task_name == "tag":
         from datasets.textclf import TextclfDataset
-        dataset = TextclfDataset(json_file, tokenizer, num_labels, args.doc_inner_batch_size, args.max_seq_length, args.encode_document, tag=True)
+        dataset = TextclfDataset(json_file, tokenizer, num_labels, args.doc_inner_batch_size, args.max_seq_length, args.encode_document, longformer, tag=True)
     if args.distributed:
         sampler = DistributedSampler(dataset)
     else:
@@ -155,16 +188,14 @@ def train_loop(args, model, train_dataloader, optimizer, lr_scheduler, num_gpus,
     model.train()
     p = tqdm(train_dataloader, desc="Iteration")
     for step, batch in enumerate(p):
-        inputs = tuple(t.cuda() for t in batch)
+        inputs = {k: v.cuda() for k, v in batch.items()}
 
-        # TODO 1: checkout if loss = outputs[0] is correct
-        # TODO 2: use mapping ** or list *, use * first
         if args.fp16 and _use_native_amp:
             with autocast():
-                outputs = model(*inputs)
+                outputs = model(**inputs)
                 loss = outputs[0]
         else:
-            outputs = model(*inputs)
+            outputs = model(**inputs)
             # We don't use .loss here since the model may return tuples instead of ModelOutput.
             loss = outputs[0]
 
@@ -294,6 +325,11 @@ def main():
                         type=str,
                         required=True,
                         help="The input data dir. Should contain the .tsv files (or other data files) for the task.")
+    parser.add_argument("--model_name",
+                        default=None,
+                        type=str,
+                        required=True,
+                        help="The name of the model to do task")
     parser.add_argument("--encode_document",
                         action='store_true',
                         help="Whether treat the text as document or not")
@@ -467,17 +503,7 @@ def main():
                 shutil.copyfile(os.path.join(args.trained_model_dir, "vocab.txt"), os.path.join(args.output_dir, "vocab.txt"))
 
     task_name = args.task_name.lower()
-
-    if args.bert_model:
-        tokenizer = tokenization.BertTokenizer(vocab_file=os.path.join(args.bert_model, 'vocab.txt'),
-                                               do_lower_case=True)
-    elif args.trained_model_dir:
-        tokenizer = tokenization.BertTokenizer(vocab_file=os.path.join(args.trained_model_dir, 'vocab.txt'),
-                                               do_lower_case=True)
-    else:
-        logger.error("BERT vocab file not set, please check your ber_model_dir or trained_model_dir")
-
-    logger.info('vocab size is %d' % (len(tokenizer.vocab)))
+    tokenizer = get_tokenizer(args)
 
     if args.do_train:
         # label_map {id: label, ...}
@@ -508,17 +534,22 @@ def main():
         # do some other things
         pass
 
-    if args.trained_model_dir:
-        logger.info('init nezha model from user fine-tune model...')
-        config = NeZhaConfig().from_json_file(os.path.join(args.trained_model_dir, 'bert_config.json'))
-        model = get_model(args, config, num_labels=num_labels)
-        model.load_state_dict(torch.load(os.path.join(args.trained_model_dir, WEIGHTS_NAME)))
-    elif args.bert_model:
-        logger.info('init nezha model from original pretrained model...')
-        config = NeZhaConfig().from_json_file(os.path.join(args.bert_model, 'bert_config.json'))
-        model = get_model(args, config, num_labels=num_labels)
-        utils.torch_show_all_params(model)
-        utils.torch_init_model(model, os.path.join(args.bert_model, 'pytorch_model.bin'))
+    if args.model_name == "nezha":
+        if args.trained_model_dir:
+            logger.info('init nezha model from user fine-tune model...')
+            config = NeZhaConfig().from_json_file(os.path.join(args.trained_model_dir, 'bert_config.json'))
+            model = get_model(args, config, num_labels=num_labels)
+            model.load_state_dict(torch.load(os.path.join(args.trained_model_dir, WEIGHTS_NAME)))
+        elif args.bert_model:
+            logger.info('init nezha model from original pretrained model...')
+            config = NeZhaConfig().from_json_file(os.path.join(args.bert_model, 'bert_config.json'))
+            model = get_model(args, config, num_labels=num_labels)
+            utils.torch_show_all_params(model)
+            utils.torch_init_model(model, os.path.join(args.bert_model, 'pytorch_model.bin'))
+    elif args.model_name == "longformer":
+        logger.info('init longformer model from original pretrained model...')
+        model = get_model(args, None, num_labels=num_labels)
+
 
     optimizer, lr_scheduler = get_optimizer_and_scheduler(args, model, num_training_steps)
     scaler = None
