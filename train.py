@@ -99,13 +99,14 @@ def get_model(args, bert_config, num_labels):
             model = LongformerForSequenceClassification(config)
             model.from_pretrained("allenai/longformer-base-4096")
             model.freeze_encoder()
+            model.unfreeze_encoder_last_layers()
             return model
         elif args.model_name == "nezha":
             if args.encode_document:
                 model = NeZhaForDocumentClassification(bert_config, args.doc_inner_batch_size, num_labels=num_labels)
-                if args.freeze_bert_encoder:
-                    model.freeze_bert_encoder()
-                    model.unfreeze_bert_encoder_last_layers()
+                if args.freeze_encoder:
+                    model.freeze_encoder()
+                    model.unfreeze_encoder_last_layers()
                 return model
             else:
                 return NeZhaForSequenceClassification(bert_config, num_labels=num_labels)
@@ -115,9 +116,9 @@ def get_model(args, bert_config, num_labels):
     elif args.task_name == "tag":
         if args.encode_document:
             model = NeZhaForDocumentTagClassification(bert_config, args.doc_inner_batch_size, num_labels=num_labels)
-            if args.freeze_bert_encoder:
-                model.freeze_bert_encoder()
-                model.unfreeze_bert_encoder_last_layers()
+            if args.freeze_encoder:
+                model.freeze_encoder()
+                model.unfreeze_encoder_last_layers()
             return model
         else:
             return NeZhaForTagClassification(bert_config, num_labels=num_labels)
@@ -276,12 +277,16 @@ def eval_loop(args, model, eval_dataloader, label_map):
         _all_logits = []
         _all_labels = []
         for step, batch in enumerate(tqdm(eval_dataloader, desc="Evaluating")):
-            batch = tuple(t.cuda() for t in batch)
+            inputs = {k: v.cuda() for k, v in batch.items()}
             if args.encode_document:
-                document_batch, label_ids = batch
-                logits = model(document_batch, None)
+                document_compose = inputs["document_compose"]
+                label_ids = inputs["labels"]
+                logits = model(document_compose, None)
             else:
-                input_ids, input_mask, segment_ids, label_ids = batch
+                input_ids = inputs["input_ids"]
+                segment_ids = inputs["segment_ids"]
+                input_mask = inputs["input_mask"]
+                label_ids = inputs["labels"]
                 logits = model(input_ids, segment_ids, input_mask, None)
             _all_logits.append(logits.detach().cpu())
             _all_labels.append(label_ids.detach().cpu())
@@ -427,7 +432,7 @@ def main():
                         default=3.0,
                         type=float,
                         help="Total number of training epochs to perform.")
-    parser.add_argument("--freeze_bert_encoder",
+    parser.add_argument("--freeze_encoder",
                         action='store_true',
                         help="Whether not to train bert encoder")
     parser.add_argument("--no_cuda",

@@ -1259,6 +1259,11 @@ class LongformerForSequenceClassification(BertPreTrainedModel):
         for param in self.longformer.parameters():
             param.requires_grad = False
 
+    def unfreeze_encoder_last_layers(self):
+        for name, param in self.longformer.named_parameters():
+            if "encoder.layer.11" in name or "pooler" in name:
+                param.requires_grad = True
+
 
 class LongformerClassificationHead(nn.Module):
     """Head for sentence-level classification tasks."""

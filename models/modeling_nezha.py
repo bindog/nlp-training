@@ -580,19 +580,19 @@ class NeZhaForDocumentClassification(BertPreTrainedModel):
         else:
             return logits
 
-    def freeze_bert_encoder(self):
+    def freeze_encoder(self):
         for param in self.bert.parameters():
             param.requires_grad = False
 
-    def unfreeze_bert_encoder(self):
+    def unfreeze_encoder(self):
         for param in self.bert.parameters():
             param.requires_grad = True
 
-    def unfreeze_bert_encoder_last_layers(self):
+    def unfreeze_encoder_last_layers(self):
         for name, param in self.bert.named_parameters():
             if "encoder.layer.11" in name or "pooler" in name:
                 param.requires_grad = True
-    def unfreeze_bert_encoder_pooler_layer(self):
+    def unfreeze_encoder_pooler_layer(self):
         for name, param in self.bert.named_parameters():
             if "pooler" in name:
                 param.requires_grad = True
