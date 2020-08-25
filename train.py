@@ -278,16 +278,12 @@ def eval_loop(args, model, eval_dataloader, label_map):
         _all_labels = []
         for step, batch in enumerate(tqdm(eval_dataloader, desc="Evaluating")):
             inputs = {k: v.cuda() for k, v in batch.items()}
-            if args.encode_document:
-                document_compose = inputs["document_compose"]
-                label_ids = inputs["labels"]
-                logits = model(document_compose, None)
-            else:
-                input_ids = inputs["input_ids"]
-                segment_ids = inputs["segment_ids"]
-                input_mask = inputs["input_mask"]
-                label_ids = inputs["labels"]
-                logits = model(input_ids, segment_ids, input_mask, None)
+            label_ids = inputs["labels"]
+            # ignore labels for inference
+            inputs["labels"] = None
+            logits = model(**inputs)
+            if isinstance(logits, tuple):
+                logits = logits[0]
             _all_logits.append(logits.detach().cpu())
             _all_labels.append(label_ids.detach().cpu())
         all_logits = torch.cat(_all_logits, 0)
