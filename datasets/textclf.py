@@ -55,10 +55,9 @@ def encode_single_document(document, tokenizer, max_seq_per_doc=5, max_seq_lengt
     return output, num_seq_in_doc + 1
 
 
-def process_chunk(chunk, tokenizer, num_labels=11, max_seq_per_doc=5, max_seq_length=128, encode_document=False, tag=False):
+def process_chunk(chunk, tokenizer, num_labels=11, max_seq_per_doc=5, max_seq_length=128, encode_document=False, longformer=False, tag=False):
     if encode_document:
         all_document_compose = []
-        all_num_seq_list= []
         all_label_ids = []
     else:
         all_input_ids = []
@@ -79,9 +78,13 @@ def process_chunk(chunk, tokenizer, num_labels=11, max_seq_per_doc=5, max_seq_le
             category = info["category"]  # int
 
         if encode_document:
-            output, num_seq_in_doc = encode_single_document(raw_text, tokenizer, max_seq_per_doc, max_seq_length)
-            all_document_compose.append(output)
-            all_num_seq_list.append(num_seq_in_doc)
+            if longformer:
+                raw_text = raw_text[:tokenizer.model_max_length]
+                output = tokenizer(raw_text, padding="max_length", return_tensors=None)
+                all_document_compose.append(output["input_ids"])
+            else:
+                output, num_seq_in_doc = encode_single_document(raw_text, tokenizer, max_seq_per_doc, max_seq_length)
+                all_document_compose.append(output)
             if tag:  # tag dataset
                 # the label_ids will become one-hot style
                 label_ids = [1 if i in category else 0 for i in range(num_labels)]
@@ -127,7 +130,7 @@ def process_chunk(chunk, tokenizer, num_labels=11, max_seq_per_doc=5, max_seq_le
                 e_index = s_index + max_seq_length - 2
 
     if encode_document:
-        return all_document_compose, all_label_ids, all_num_seq_list
+        return all_document_compose, all_label_ids
     else:
         return all_input_ids, all_input_mask, all_segment_ids, all_label_ids
 
@@ -166,7 +169,7 @@ def split_chunks(filename, grain=10000):
 
 
 class TextclfDataset(torch.utils.data.Dataset):
-    def __init__(self, json_path, tokenizer, num_labels=None, max_seq_per_doc=6, max_seq_length=128, encode_document=False, tag=False):
+    def __init__(self, json_path, tokenizer, num_labels=None, max_seq_per_doc=6, max_seq_length=128, encode_document=False, longformer=False, tag=False):
         """Initiate Textclf Dataset dataset.
         Arguments:
             json_path: dataset json file
@@ -175,18 +178,24 @@ class TextclfDataset(torch.utils.data.Dataset):
             max_seq_per_doc: enabled if encode_document is True, the max inner batch_size of a document
             max_seq_length: the max sequence length which BERT supports
             encode_document: whether treat the text as a document
+            longformer: as a document, but use the longformer model and longformer tokenizer
             tag: the labels will be multi_label if True, else just a normal label
         """
         super(TextclfDataset, self).__init__()
         self.num_labels = num_labels
         self.encode_document = encode_document
+        self.longformer = longformer
         self.tag = tag
 
         logger.info("prepare textclf dataset from: " + json_path)
         logger.info("number of labels: " + str(num_labels) + "\tmultilabel tagging: " + str(tag))
         if self.encode_document:
-            max_doc_length = (max_seq_length - 2) * max_seq_per_doc
-            logger.info("encode document enabled, the longest length of a document can be: " + str(max_doc_length))
+            if self.longformer:
+                max_doc_length = tokenizer.model_max_length
+                logger.info("encode document and longformer enabled, the longest length of a document can be: " + str(max_doc_length))
+            else:
+                max_doc_length = (max_seq_length - 2) * max_seq_per_doc
+                logger.info("encode document enabled, the longest length of a document can be: " + str(max_doc_length))
 
         # use mmap and seek to split the huge data file into small chunks
         chunks = split_chunks(json_path, grain=4000)
@@ -202,6 +211,7 @@ class TextclfDataset(torch.utils.data.Dataset):
                 repeat(max_seq_per_doc),
                 repeat(max_seq_length),
                 repeat(encode_document),
+                repeat(longformer),
                 repeat(tag)
             )
         )
@@ -211,8 +221,8 @@ class TextclfDataset(torch.utils.data.Dataset):
             all_results.append(list(chain(*parts)))
         if encode_document:
             self.all_document_compose = torch.tensor(all_results[0], dtype=torch.long)
+            self.all_attention_mask = torch.ones(self.all_document_compose.shape, dtype=torch.long, device=self.all_document_compose.device)
             self.all_label_ids = torch.tensor(all_results[1], dtype=torch.long)
-            self.all_num_seq_list = torch.tensor(all_results[2], dtype=torch.long)
         else:
             self.all_input_ids = torch.tensor(all_results[0], dtype=torch.long)
             self.all_input_mask = torch.tensor(all_results[1], dtype=torch.long)
@@ -222,9 +232,25 @@ class TextclfDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, i):
         if self.encode_document:
-            return self.all_document_compose[i], self.all_label_ids[i]
+            if self.longformer:
+                # longformer model only needs input_ids and attention_mask
+                return {
+                    "input_ids": self.all_document_compose[i],
+                    "attention_mask": self.all_attention_mask[i],
+                    "labels": self.all_label_ids[i]
+                }
+            else:
+                return {
+                    "document_compose": self.all_document_compose[i],
+                    "labels": self.all_label_ids[i]
+                }
         else:
-            return self.all_input_ids[i], self.all_input_mask[i], self.all_segment_ids[i], self.all_label_ids[i]
+            return {
+                "input_ids": self.all_input_ids[i],
+                "input_mask": self.all_input_mask[i],
+                "segment_ids": self.all_segment_ids[i],
+                "labels": self.all_label_ids[i]
+            }
 
     def __len__(self):
         return len(self.all_label_ids)
