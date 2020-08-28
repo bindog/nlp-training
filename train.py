@@ -198,7 +198,10 @@ def train_loop(args, model, train_dataloader, optimizer, lr_scheduler, num_gpus,
         else:
             outputs = model(**inputs)
             # We don't use .loss here since the model may return tuples instead of ModelOutput.
-            loss = outputs[0]
+            if isinstance(outputs, tuple):
+                loss = outputs[0]
+            else:
+                loss = outputs
 
         if num_gpus > 1:
             loss = loss.mean()  # mean() to average on multi-gpu parallel training
