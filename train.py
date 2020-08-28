@@ -498,16 +498,22 @@ def main():
             logger.warn("Output directory ({}) already exists and is not empty.".format(args.output_dir))
             time.sleep(2)
 
-        if not os.path.exists(args.output_dir):
-            os.makedirs(args.output_dir)
-            # copy vocab.txt from pretrained model dir to output dir
-            if args.bert_model:
-                shutil.copyfile(os.path.join(args.bert_model, "vocab.txt"), os.path.join(args.output_dir, "vocab.txt"))
-            elif args.trained_model_dir and args.trained_model_dir != args.output_dir:
-                shutil.copyfile(os.path.join(args.trained_model_dir, "vocab.txt"), os.path.join(args.output_dir, "vocab.txt"))
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)
 
     task_name = args.task_name.lower()
+    model_name = args.model_name.lower()
     tokenizer = get_tokenizer(args)
+
+    if model_name == "nezha":
+        # copy vocab.txt from pretrained model dir to output dir
+        if args.bert_model:
+            shutil.copyfile(os.path.join(args.bert_model, "vocab.txt"), os.path.join(args.output_dir, "vocab.txt"))
+        elif args.trained_model_dir and args.trained_model_dir != args.output_dir:
+            shutil.copyfile(os.path.join(args.trained_model_dir, "vocab.txt"), os.path.join(args.output_dir, "vocab.txt"))
+    # TODO: if other model name needs the vocab.txt
+    # elif model_name == "OTHER"
+    # pass
 
     if args.do_train:
         # label_map {id: label, ...}
