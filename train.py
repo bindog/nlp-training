@@ -44,7 +44,6 @@ from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
 
-# from file_utils import PYTORCH_PRETRAINED_BERT_CACHE
 from models.modeling_nezha import (NeZhaForSequenceClassification, NeZhaForTokenClassification,
                             NeZhaForDocumentClassification, NeZhaForDocumentTagClassification,
                             NeZhaForTagClassification, NeZhaConfig, WEIGHTS_NAME, CONFIG_NAME)
