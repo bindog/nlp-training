@@ -81,6 +81,9 @@ def get_tokenizer(args):
     elif args.model_name == "longformer":
         from models.tokenization_longformer import LongformerTokenizer
         tokenizer = LongformerTokenizer.from_pretrained("allenai/longformer-base-4096")
+    elif args.model_name == "bart":
+        from models.tokenization_bart import BartTokenizer
+        tokenizer = BartTokenizer.from_pretrained('facebook/bart-large-cnn')
     else:
         logger.error("can not find the proper tokenizer type...")
     return tokenizer
@@ -121,6 +124,13 @@ def get_model(args, bert_config, num_labels):
             return model
         else:
             return NeZhaForTagClassification(bert_config, num_labels=num_labels)
+    elif args.task_name == "summary":
+        from models.modeling_bart import BartForConditionalGeneration
+        model = BartForConditionalGeneration.from_pretrained("facebook/bart-large-cnn")
+        if args.freeze_encoder:
+            model.freeze_encoder()
+            model.unfreeze_encoder_last_layers()
+        return model
     else:
         logger.error("task type not supported!")
         return None
@@ -156,6 +166,9 @@ def get_optimizer_and_scheduler(args, model, num_training_steps):
 
 
 def get_dataloader(args, tokenizer, num_labels, split):
+    # FIXME
+    if args.task_name == "summary" and split == "dev":
+        split = "val"
     json_file = os.path.join(args.data_dir, split + ".json")
     if args.task_name == "ner":
         from datasets.ner import NERDataset
@@ -168,6 +181,9 @@ def get_dataloader(args, tokenizer, num_labels, split):
     elif args.task_name == "tag":
         from datasets.textclf import TextclfDataset
         dataset = TextclfDataset(json_file, tokenizer, num_labels, args.doc_inner_batch_size, args.max_seq_length, args.encode_document, longformer, tag=True)
+    elif args.task_name == "summary":
+        from datasets.summarization import SummarizationDataset
+        dataset = SummarizationDataset(json_file, tokenizer)
     if args.distributed:
         sampler = DistributedSampler(dataset)
     else:
@@ -318,6 +334,9 @@ def eval_loop(args, model, eval_dataloader, label_map):
         # logger.info("FPR: " + str(fpr))
         # logger.info("TPR: " + str(tpr))
         # logger.info("ROC and AUC: " + str(roc_auc_dict))
+    elif args.task_name == "summary":
+        # TODO do summary eval
+        pass
 
 
 def main():
@@ -557,6 +576,9 @@ def main():
             utils.torch_init_model(model, os.path.join(args.bert_model, 'pytorch_model.bin'))
     elif args.model_name == "longformer":
         logger.info('init longformer model from original pretrained model...')
+        model = get_model(args, None, num_labels=num_labels)
+    elif args.model_name == "bart":
+        logger.info('init bart model from original pretrained model...')
         model = get_model(args, None, num_labels=num_labels)
 
 
