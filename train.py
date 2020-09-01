@@ -67,6 +67,16 @@ else:
     from torch.cuda.amp import autocast
 
 
+def get_split_path(data_dir, split):
+    if split == "val" or split == "dev" or split == "valid":
+        c_list = ["val", "dev", "valid"]
+        for c in c_list:
+            json_path = os.path.join(data_dir, c + ".json")
+            if os.path.exists(json_path):
+                return json_path
+    return os.path.join(data_dir, split + ".json")
+
+
 def get_tokenizer(args):
     if args.model_name == "nezha":
         if args.bert_model:
@@ -82,8 +92,8 @@ def get_tokenizer(args):
         from models.tokenization_longformer import LongformerTokenizer
         tokenizer = LongformerTokenizer.from_pretrained("allenai/longformer-base-4096")
     elif args.model_name == "bart":
-        from models.tokenization_bart import BartTokenizer
-        tokenizer = BartTokenizer.from_pretrained('facebook/bart-large-cnn')
+        from models.tokenization_mbart import MBartTokenizer
+        tokenizer = MBartTokenizer.from_pretrained('facebook/mbart-large-cc25')
     else:
         logger.error("can not find the proper tokenizer type...")
     return tokenizer
@@ -125,8 +135,8 @@ def get_model(args, bert_config, num_labels):
         else:
             return NeZhaForTagClassification(bert_config, num_labels=num_labels)
     elif args.task_name == "summary":
-        from models.modeling_bart import BartForConditionalGeneration
-        model = BartForConditionalGeneration.from_pretrained("facebook/bart-large-cnn")
+        from models.modeling_mbart import MBartForConditionalGeneration
+        model = MBartForConditionalGeneration.from_pretrained("facebook/mbart-large-cc25")
         if args.freeze_encoder:
             model.freeze_encoder()
             model.unfreeze_encoder_last_layers()
@@ -166,10 +176,7 @@ def get_optimizer_and_scheduler(args, model, num_training_steps):
 
 
 def get_dataloader(args, tokenizer, num_labels, split):
-    # FIXME
-    if args.task_name == "summary" and split == "dev":
-        split = "val"
-    json_file = os.path.join(args.data_dir, split + ".json")
+    json_file = get_split_path(args.data_dir, split)
     if args.task_name == "ner":
         from datasets.ner import NERDataset
         label_map_path = os.path.join(args.data_dir, "label_map")

@@ -112,7 +112,6 @@ class SummarizationDataset(torch.utils.data.Dataset):
         return {
             "input_ids": self.all_input_ids[i],
             "attention_mask": self.all_attention_mask[i],
-            "decoder_input_ids": self.all_label_ids[i],
             "labels": self.all_label_ids[i]
         }
 
