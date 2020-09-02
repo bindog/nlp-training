@@ -17,6 +17,7 @@ requests==2.24.0
 s3transfer==0.3.3
 scipy==1.5.2
 seqeval==0.0.12
+sumeval==0.2.2
 six==1.15.0
 torch==1.6.0
 torchvision==0.7.0
@@ -24,3 +25,4 @@ tqdm==4.48.0
 tokenizers==0.8.1
 urllib3==1.25.10
 scikit-learn==0.23.2
+wandb==0.9.6

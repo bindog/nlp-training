@@ -33,6 +33,9 @@ import logging
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s %(filename)s %(lineno)d] %(message)s")
 logger = logging.getLogger(__name__)
 
+import wandb
+wandb.init(project="nlp-task")
+
 from packaging import version
 from tools import official_tokenization as tokenization, utils
 import numpy as np
@@ -207,7 +210,7 @@ def get_dataloader(args, tokenizer, num_labels, split):
     return len(dataset), dataloader
 
 
-def train_loop(args, model, train_dataloader, optimizer, lr_scheduler, num_gpus, global_step, scaler=None):
+def train_loop(args, model, train_dataloader, optimizer, lr_scheduler, num_gpus, epoch, global_step, scaler=None):
     model.train()
     p = tqdm(train_dataloader, desc="Iteration")
     for step, batch in enumerate(p):
@@ -262,6 +265,8 @@ def train_loop(args, model, train_dataloader, optimizer, lr_scheduler, num_gpus,
 
             if global_step % 10 == 0:
                 p.set_postfix(loss=round(loss.item(), 4))
+                wandb.log({"epoch": epoch, "step": step, "global_step": global_step,
+                           "learning rate": lr_scheduler.get_lr(), "train_loss": loss.item()})
 
 
 def eval_loop(args, model, eval_dataloader, label_map):
@@ -588,6 +593,8 @@ def main():
         logger.info('init bart model from original pretrained model...')
         model = get_model(args, None, num_labels=num_labels)
 
+    # check model details on wandb
+    wandb.watch(model)
 
     optimizer, lr_scheduler = get_optimizer_and_scheduler(args, model, num_training_steps)
     scaler = None
@@ -612,14 +619,14 @@ def main():
 
     global_step = 0
     if args.do_train:
-        logger.info("================ start training on train set ===================")
-        num_epoch = 0
+        logger.info("== start training on train set ==")
+        epoch = 0
         for _ in trange(int(args.num_train_epochs), desc="Epoch"):
             # train loop in one epoch
-            train_loop(args, model, train_dataloader, optimizer, lr_scheduler, num_gpus, global_step, scaler)
+            train_loop(args, model, train_dataloader, optimizer, lr_scheduler, num_gpus, epoch, global_step, scaler)
 
             # begin to evaluate
-            logger.info("================ running evaluation on dev set ===================")
+            logger.info("== running evaluation on dev set ==")
             eval_loop(args, model, eval_dataloader, label_map)
 
             # Save a trained model and the associated configuration
@@ -630,15 +637,15 @@ def main():
             with open(output_config_file, 'w') as f:
                 f.write(model_to_save.config.to_json_string())
 
-            num_epoch += 1
+            epoch += 1
 
     if args.do_eval and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
-        logger.info("================ running evaluation on dev set ===================")
+        logger.info("== running evaluation on dev set ==")
         _, eval_dataloader = get_dataloader(args, tokenizer, num_labels, "dev")
         eval_loop(args, model, eval_dataloader, label_map)
 
     if args.do_test:
-        logger.info("================ running evaluation in test set ===================")
+        logger.info("== running evaluation in test set ==")
         _, eval_dataloader = get_dataloader(args, tokenizer, num_labels, "test")
         eval_loop(args, model, eval_dataloader, label_map)
 
