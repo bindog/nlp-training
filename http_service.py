@@ -80,6 +80,8 @@ if __name__ == '__main__':
         from tools.inference import NERInferenceService as InferenceService
     elif opt.task == "textclf" or opt.task == "tag":
         from tools.inference import TextclfInfercenceService as InferenceService
+    elif opt.task == "summary":
+        from tools.inference import SummarizationInferenceService as InferenceService
     recognizer = InferenceService(
                             opt.model_dir,
                             encode_document=opt.encode_document,
