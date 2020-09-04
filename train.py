@@ -29,6 +29,7 @@ import csv
 import json
 import time
 import logging
+import wandb
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s %(filename)s %(lineno)d] %(message)s")
 logger = logging.getLogger(__name__)
@@ -207,7 +208,7 @@ def get_dataloader(args, tokenizer, num_labels, split):
     return len(dataset), dataloader
 
 
-def train_loop(args, model, train_dataloader, optimizer, lr_scheduler, num_gpus, epoch, global_step, scaler=None):
+def train_loop(args, model, train_dataloader, optimizer, lr_scheduler, num_gpus, epoch, scaler=None):
     model.train()
     p = tqdm(train_dataloader, desc="Iteration")
     for step, batch in enumerate(p):
@@ -258,12 +259,11 @@ def train_loop(args, model, train_dataloader, optimizer, lr_scheduler, num_gpus,
 
             lr_scheduler.step()
             model.zero_grad()
-            global_step += 1
 
-            if global_step % 10 == 0 and not args.debug:
+            if step % 10 == 0 and step > 0 and not args.debug:
                 p.set_postfix(loss=round(loss.item(), 4))
-                wandb.log({"epoch": epoch, "step": step, "global_step": global_step,
-                           "learning rate": lr_scheduler.get_lr(), "train_loss": loss.item()})
+                wandb.log({"epoch": epoch, "step": step, "train_loss": loss.item(),
+                           "learning_rate": lr_scheduler.get_last_lr()[0]})
 
 
 def eval_loop(args, model, eval_dataloader, label_map):
@@ -353,9 +353,6 @@ def eval_loop(args, model, eval_dataloader, label_map):
             summary_ids = model.generate(inputs['input_ids'], num_beams=4, max_length=56, early_stopping=True)
             summary_text = [args.tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in summary_ids]
             label_text = [args.tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in label_ids]
-            print(summary_text)
-            print(label_text)
-
             summary_list.extend(summary_text)
             references_list.extend(label_text)
         avg_score, scores = evaluate_bleu(summary_list, references_list)
@@ -508,7 +505,6 @@ def main():
     args = parser.parse_args()
 
     if not args.debug:
-        import wandb
         wandb.init(project="nlp-task")
 
     if args.no_cuda:
@@ -644,13 +640,12 @@ def main():
     elif num_gpus > 1:
         model = torch.nn.DataParallel(model)
 
-    global_step = 0
     if args.do_train:
         logger.info("== start training on train set ==")
         epoch = 0
         for _ in trange(int(args.num_train_epochs), desc="Epoch"):
             # train loop in one epoch
-            train_loop(args, model, train_dataloader, optimizer, lr_scheduler, num_gpus, epoch, global_step, scaler)
+            train_loop(args, model, train_dataloader, optimizer, lr_scheduler, num_gpus, epoch, scaler)
 
             # begin to evaluate
             logger.info("== running evaluation on dev set ==")
