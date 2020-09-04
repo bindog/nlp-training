@@ -33,9 +33,6 @@ import logging
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s %(filename)s %(lineno)d] %(message)s")
 logger = logging.getLogger(__name__)
 
-import wandb
-wandb.init(project="nlp-task")
-
 from packaging import version
 from tools import official_tokenization as tokenization, utils
 import numpy as np
@@ -263,7 +260,7 @@ def train_loop(args, model, train_dataloader, optimizer, lr_scheduler, num_gpus,
             model.zero_grad()
             global_step += 1
 
-            if global_step % 10 == 0:
+            if global_step % 10 == 0 and not args.debug:
                 p.set_postfix(loss=round(loss.item(), 4))
                 wandb.log({"epoch": epoch, "step": step, "global_step": global_step,
                            "learning rate": lr_scheduler.get_lr(), "train_loss": loss.item()})
@@ -347,8 +344,22 @@ def eval_loop(args, model, eval_dataloader, label_map):
         # logger.info("TPR: " + str(tpr))
         # logger.info("ROC and AUC: " + str(roc_auc_dict))
     elif args.task_name == "summary":
-        # TODO do summary eval
-        pass
+        from evaluation.summarization_eval import evaluate_bleu
+        summary_list = []
+        references_list = []
+        for step, batch in enumerate(tqdm(eval_dataloader, desc="Evaluating")):
+            inputs = {k: v.cuda() for k, v in batch.items()}
+            label_ids = inputs["labels"]
+            summary_ids = model.generate(inputs['input_ids'], num_beams=4, max_length=56, early_stopping=True)
+            summary_text = [args.tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in summary_ids]
+            label_text = [args.tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in label_ids]
+            print(summary_text)
+            print(label_text)
+
+            summary_list.extend(summary_text)
+            references_list.extend(label_text)
+        avg_score, scores = evaluate_bleu(summary_list, references_list)
+        logger.info("BLEU average score: " + str(round(avg_score, 4)))
 
 
 def main():
@@ -491,7 +502,14 @@ def main():
                         help="Loss scaling to improve fp16 numeric stability. Only used when fp16 set to True.\n"
                              "0 (default value): dynamic loss scaling.\n"
                              "Positive power of 2: static loss scaling value.\n")
+    parser.add_argument('--debug',
+                        action='store_true',
+                        help="in debug mode, will not enable wandb log")
     args = parser.parse_args()
+
+    if not args.debug:
+        import wandb
+        wandb.init(project="nlp-task")
 
     if args.no_cuda:
         logger.info("can not train without GPU")
@@ -534,6 +552,7 @@ def main():
     task_name = args.task_name.lower()
     model_name = args.model_name.lower()
     tokenizer = get_tokenizer(args)
+    args.tokenizer = tokenizer
 
     if model_name == "nezha":
         # copy vocab.txt from pretrained model dir to output dir
@@ -547,10 +566,17 @@ def main():
 
     if args.do_train:
         # label_map {id: label, ...}
-        with open(os.path.join(args.data_dir, "label_map")) as f:
-            label_map = json.loads(f.read().strip())
-            label_map = {int(k):v for k, v in label_map.items()}
+        if args.task_name in ["ner", "textclf", "tag"]:
+            if not os.path.exists(os.path.join(args.data_dir, "label_map")):
+                logger.info("your task type need a label_map file under data_dir, please check!")
+                exit()
+            with open(os.path.join(args.data_dir, "label_map")) as f:
+                label_map = json.loads(f.read().strip())
+                label_map = {int(k):v for k, v in label_map.items()}
+        else:
+            label_map = {}
         num_labels = len(label_map)
+
 
         # copy label_map to output dir
         label_file = os.path.join(args.output_dir, "label_map_training.txt")
@@ -594,7 +620,8 @@ def main():
         model = get_model(args, None, num_labels=num_labels)
 
     # check model details on wandb
-    wandb.watch(model)
+    if not args.debug:
+        wandb.watch(model)
 
     optimizer, lr_scheduler = get_optimizer_and_scheduler(args, model, num_training_steps)
     scaler = None
@@ -648,6 +675,7 @@ def main():
         logger.info("== running evaluation in test set ==")
         _, eval_dataloader = get_dataloader(args, tokenizer, num_labels, "test")
         eval_loop(args, model, eval_dataloader, label_map)
+
 
 if __name__ == "__main__":
     main()
