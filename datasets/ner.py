@@ -150,7 +150,7 @@ def split_chunks(filename, grain=10000):
 
 class NERDataset(Dataset):
     def __init__(self, json_path, label_map_path, tokenizer, num_labels=None, max_seq_length=128):
-        """Initiate MultiLabelingDataset dataset.
+        """Initiate NERDataset dataset.
         Arguments:
             json_path:
             num_labels:
@@ -166,7 +166,7 @@ class NERDataset(Dataset):
 
         assert self.num_labels == len(self.label_map_reverse), "num_labels should equals to label_map"
 
-        logger.info("prepare multilabeling dataset from: " + json_path)
+        logger.info("prepare ner dataset from: " + json_path)
         logger.info("number of labels: " + str(self.num_labels))
 
         # use mmap and seek to split the huge data file into small chunks
@@ -187,7 +187,7 @@ class NERDataset(Dataset):
         self.all_input_mask = torch.tensor(all_results[1], dtype=torch.long)
         self.all_segment_ids = torch.tensor(all_results[2], dtype=torch.long)
         self.all_label_ids = torch.tensor(all_results[3], dtype=torch.long)
-        logger.info("multilabeling dataset ready...")
+        logger.info("ner dataset ready...")
 
     def __getitem__(self, i):
         return self.all_input_ids[i], self.all_input_mask[i], self.all_segment_ids[i], self.all_label_ids[i]
