@@ -136,8 +136,12 @@ def get_model(args, bert_config, num_labels):
         else:
             return NeZhaForTagClassification(bert_config, num_labels=num_labels)
     elif args.task_name == "summary":
+        from models.configuration_mbart import MBartConfig
         from models.modeling_mbart import MBartForConditionalGeneration
-        model = MBartForConditionalGeneration.from_pretrained("facebook/mbart-large-cc25")
+        config = MBartConfig.from_pretrained("facebook/mbart-large-cc25")
+        if args.gradient_checkpointing:
+            config["gradient_checkpointing"] = True
+        model = MBartForConditionalGeneration(config)
         if args.freeze_encoder:
             model.freeze_encoder()
             model.unfreeze_encoder_last_layers()
@@ -264,7 +268,6 @@ def train_loop(args, model, train_dataloader, optimizer, lr_scheduler, num_gpus,
                 p.set_postfix(loss=round(loss.item(), 4))
                 wandb.log({"epoch": epoch, "step": step, "train_loss": loss.item(),
                            "learning_rate": lr_scheduler.get_last_lr()[0]})
-        break
 
 
 def eval_loop(args, model, eval_dataloader, label_map):
@@ -494,6 +497,9 @@ def main():
                         type=int,
                         default=1,
                         help="Number of updates steps to accumulate before performing a backward/update pass.")
+    parser.add_argument('--gradient_checkpointing',
+                        action='store_true',
+                        help="Whether to use gradient checkpointing")
     parser.add_argument('--fp16',
                         action='store_true',
                         help="Whether to use 16-bit float precision instead of 32-bit")

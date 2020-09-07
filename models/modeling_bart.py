@@ -224,6 +224,7 @@ class EncoderLayer(nn.Module):
     def __init__(self, config: BartConfig):
         super().__init__()
         self.embed_dim = config.d_model
+        self.gradient_checkpointing = getattr(config, "gradient_checkpointing", False) and self.training
         self.self_attn = Attention(self.embed_dim, config.encoder_attention_heads, dropout=config.attention_dropout)
         self.normalize_before = config.normalize_before
         self.self_attn_layer_norm = LayerNorm(self.embed_dim)
@@ -267,6 +268,8 @@ class EncoderLayer(nn.Module):
         x = residual + x
         if not self.normalize_before:
             x = self.final_layer_norm(x)
+        if attn_weights is None and self.gradient_checkpointing:
+            attn_weights = torch.zeros(1)
         return x, attn_weights
 
 
@@ -282,6 +285,7 @@ class BartEncoder(nn.Module):
     def __init__(self, config: BartConfig, embed_tokens):
         super().__init__()
 
+        self.gradient_checkpointing = getattr(config, "gradient_checkpointing", False) and self.training
         self.dropout = config.dropout
         self.layerdrop = config.encoder_layerdrop
 
@@ -348,7 +352,24 @@ class BartEncoder(nn.Module):
             if self.training and (dropout_probability < self.layerdrop):  # skip the layer
                 attn = None
             else:
+                # if self.gradient_checkpointing:
+                #     def create_custom_forward(module):
+                #         def custom_forward(*inputs):
+                #             return module(*inputs, output_attentions=output_attentions)
+
+                #         return custom_forward
+
+                #     x, attn = torch.utils.checkpoint.checkpoint(
+                #         create_custom_forward(encoder_layer),
+                #         x,
+                #         attention_mask
+                #     )
+                # else:
+                #     x, attn = encoder_layer(x, attention_mask, output_attentions=output_attentions)
+
                 x, attn = encoder_layer(x, attention_mask, output_attentions=output_attentions)
+                attn = None if attn.byte().item() == 0 else attn
+
 
             if output_attentions:
                 all_attentions = all_attentions + (attn,)
@@ -373,6 +394,8 @@ class DecoderLayer(nn.Module):
         super().__init__()
         self.embed_dim = config.d_model
 
+        self.gradient_checkpointing = getattr(config, "gradient_checkpointing", False) and self.training
+        print("debug gradient_checkpointing set in DecoderLayer:", self.gradient_checkpointing)
         self.self_attn = Attention(
             embed_dim=self.embed_dim,
             num_heads=config.decoder_attention_heads,
@@ -406,7 +429,6 @@ class DecoderLayer(nn.Module):
         output_attentions=False,
     ):
         residual = x
-
         if layer_state is None:
             layer_state = {}
         if self.normalize_before:
@@ -453,11 +475,41 @@ class DecoderLayer(nn.Module):
         x = residual + x
         if not self.normalize_before:
             x = self.final_layer_norm(x)
-        return (
-            x,
-            self_attn_weights,
-            layer_state,
-        )  # just self_attn weights for now, following t5, layer_state = cache for decoding
+
+        if self.gradient_checkpointing:
+            self_prev_key = layer_state["self"]["prev_key"]
+            self_prev_value = layer_state["self"]["prev_value"]
+            self_prev_key_padding_mask = layer_state["self"]["prev_key_padding_mask"]
+            if self_prev_key_padding_mask is None:
+                self_prev_key_padding_mask = torch.zeros(1, requires_grad=True)
+            else:
+                self_prev_key_padding_mask = self_prev_key_padding_mask.float()
+                self_prev_key_padding_mask.requires_grad = True
+
+            ed_prev_key = layer_state["encoder_decoder"]["prev_key"]
+            ed_prev_value = layer_state["encoder_decoder"]["prev_value"]
+            ed_prev_key_padding_mask = layer_state["encoder_decoder"]["prev_key_padding_mask"]
+            if ed_prev_key_padding_mask is None:
+                ed_prev_key_padding_mask = torch.zeros(1, requires_grad=True)
+
+            if self_attn_weights is None:
+                self_attn_weights = torch.zeros(1, requires_grad=True)
+            return (
+                x,
+                self_attn_weights,
+                self_prev_key,
+                self_prev_value,
+                self_prev_key_padding_mask,
+                ed_prev_key,
+                ed_prev_value,
+                ed_prev_key_padding_mask
+            )
+        else:
+            return (
+                x,
+                self_attn_weights,
+                layer_state,
+            )  # just self_attn weights for now, following t5, layer_state = cache for decoding
 
 
 class BartDecoder(nn.Module):
@@ -472,6 +524,8 @@ class BartDecoder(nn.Module):
     def __init__(self, config: BartConfig, embed_tokens: nn.Embedding):
         super().__init__()
         self.dropout = config.dropout
+        self.gradient_checkpointing = getattr(config, "gradient_checkpointing", False) and self.training
+        print("debug gradient_checkpointing BartDecoder: ", self.gradient_checkpointing)
         self.layerdrop = config.decoder_layerdrop
         self.padding_idx = embed_tokens.padding_idx
         self.max_target_positions = config.max_position_embeddings
@@ -569,15 +623,52 @@ class BartDecoder(nn.Module):
 
             layer_state = decoder_past_key_values[idx] if decoder_past_key_values is not None else None
 
-            x, layer_self_attn, layer_past = decoder_layer(
-                x,
-                encoder_hidden_states,
-                encoder_attn_mask=encoder_padding_mask,
-                decoder_padding_mask=decoder_padding_mask,
-                layer_state=layer_state,
-                causal_mask=decoder_causal_mask,
-                output_attentions=output_attentions,
-            )
+            if self.gradient_checkpointing:
+                def create_custom_forward(module):
+                    def custom_forward(*inputs):
+                        return module(
+                            *inputs,
+                            encoder_attn_mask=encoder_padding_mask,
+                            decoder_padding_mask=decoder_padding_mask,
+                            layer_state=layer_state,
+                            causal_mask=decoder_causal_mask,
+                            output_attentions=output_attentions
+                        )
+
+                    return custom_forward
+
+                x, layer_self_attn, self_prev_key, self_prev_value, self_prev_key_padding_mask, ed_prev_key, ed_prev_value, ed_prev_key_padding_mask = torch.utils.checkpoint.checkpoint(
+                    create_custom_forward(decoder_layer),
+                    x,
+                    encoder_hidden_states
+                )
+                layer_self_attn = None if layer_self_attn.byte().item() == 0 else layer_self_attn
+                if len(self_prev_key_padding_mask.size()) == 1 and self_prev_key_padding_mask.byte().item() == 0:
+                    self_prev_key_padding_mask = None
+                else:
+                    self_prev_key_padding_mask = self_prev_key_padding_mask > 0.5
+                layer_past = {
+                    "self": {
+                        "prev_key": self_prev_key,
+                        "prev_value": self_prev_value,
+                        "prev_key_padding_mask": self_prev_key_padding_mask
+                    },
+                    "encoder_decoder": {
+                        "prev_key": ed_prev_key,
+                        "prev_value": ed_prev_value,
+                        "prev_key_padding_mask": None if ed_prev_key_padding_mask.byte().item() == 0 else ed_prev_key_padding_mask
+                    }
+                }
+            else:
+                x, layer_self_attn, layer_past = decoder_layer(
+                    x,
+                    encoder_hidden_states,
+                    encoder_attn_mask=encoder_padding_mask,
+                    decoder_padding_mask=decoder_padding_mask,
+                    layer_state=layer_state,
+                    causal_mask=decoder_causal_mask,
+                    output_attentions=output_attentions,
+                )
 
             if use_cache:
                 next_decoder_cache.append(layer_past.copy())

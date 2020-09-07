@@ -39,7 +39,7 @@ class SummarizationInferenceService(object):
 
     def inference(self, text):
         inputs = self.tokenizer([text], max_length=1024, return_tensors='pt')
-        summary_ids = self.model.generate(inputs['input_ids'].cuda(), num_beams=4, max_length=20, early_stopping=True)
+        summary_ids = self.model.generate(inputs['input_ids'].cuda(), num_beams=4, max_length=50, early_stopping=True)
         summary_text = [self.tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in summary_ids]
         print("debug summary:", summary_text)
         return "".join(summary_text)
