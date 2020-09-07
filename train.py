@@ -264,6 +264,7 @@ def train_loop(args, model, train_dataloader, optimizer, lr_scheduler, num_gpus,
                 p.set_postfix(loss=round(loss.item(), 4))
                 wandb.log({"epoch": epoch, "step": step, "train_loss": loss.item(),
                            "learning_rate": lr_scheduler.get_last_lr()[0]})
+        break
 
 
 def eval_loop(args, model, eval_dataloader, label_map):
@@ -345,18 +346,24 @@ def eval_loop(args, model, eval_dataloader, label_map):
         # logger.info("ROC and AUC: " + str(roc_auc_dict))
     elif args.task_name == "summary":
         from evaluation.summarization_eval import evaluate_bleu
+        table = wandb.Table(columns=["Text", "Predicted Summary", "Reference Summary"])
         summary_list = []
         references_list = []
         for step, batch in enumerate(tqdm(eval_dataloader, desc="Evaluating")):
             inputs = {k: v.cuda() for k, v in batch.items()}
+            # FIXME we got some problems in this max length of summary in Datasets Class
             label_ids = inputs["labels"]
             summary_ids = model.generate(inputs['input_ids'], num_beams=4, max_length=56, early_stopping=True)
             summary_text = [args.tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in summary_ids]
             label_text = [args.tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in label_ids]
             summary_list.extend(summary_text)
             references_list.extend(label_text)
+            # get the first example from batch as wandb case
+            raw_text_0 = args.tokenizer.decode(inputs['input_ids'][0], skip_special_tokens=True, clean_up_tokenization_spaces=False)
+            table.add_data(raw_text_0, summary_text[0], label_text[0])
         avg_score, scores = evaluate_bleu(summary_list, references_list)
         logger.info("BLEU average score: " + str(round(avg_score, 4)))
+        wandb.log({"examples": table})
 
 
 def main():
@@ -569,17 +576,14 @@ def main():
             with open(os.path.join(args.data_dir, "label_map")) as f:
                 label_map = json.loads(f.read().strip())
                 label_map = {int(k):v for k, v in label_map.items()}
+            # copy label_map to output dir
+            shutil.copyfile(
+                os.path.join(args.data_dir, "label_map"),
+                os.path.join(args.output_dir, "label_map")
+            )
         else:
             label_map = {}
         num_labels = len(label_map)
-
-
-        # copy label_map to output dir
-        label_file = os.path.join(args.output_dir, "label_map_training.txt")
-        shutil.copyfile(
-            os.path.join(args.data_dir, "label_map"),
-            os.path.join(args.output_dir, "label_map")
-        )
 
         # label_map_reverse {label: id, ...}
         label_map_reverse = {v: k for k, v in label_map.items()}
