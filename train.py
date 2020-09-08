@@ -136,12 +136,11 @@ def get_model(args, bert_config, num_labels):
         else:
             return NeZhaForTagClassification(bert_config, num_labels=num_labels)
     elif args.task_name == "summary":
-        from models.configuration_mbart import MBartConfig
         from models.modeling_mbart import MBartForConditionalGeneration
-        config = MBartConfig.from_pretrained("facebook/mbart-large-cc25")
-        if args.gradient_checkpointing:
-            config["gradient_checkpointing"] = True
-        model = MBartForConditionalGeneration(config)
+        gradient_checkpointing_flag = True if args.gradient_checkpointing else False
+        if gradient_checkpointing_flag:
+            logger.info("gradient checkpointing enabled")
+        model = MBartForConditionalGeneration.from_pretrained("facebook/mbart-large-cc25", gradient_checkpointing=gradient_checkpointing_flag)
         if args.freeze_encoder:
             model.freeze_encoder()
             model.unfreeze_encoder_last_layers()

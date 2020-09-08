@@ -197,6 +197,9 @@ class BartConfig(PretrainedConfig):
 
         self.force_bos_token_to_be_generated = force_bos_token_to_be_generated
 
+        # gradient_checkpointing
+        self.gradient_checkpointing = False
+
     @property
     def num_attention_heads(self) -> int:
         return self.encoder_attention_heads
@@ -212,3 +215,6 @@ class BartConfig(PretrainedConfig):
         if self.normalize_before or self.add_final_layer_norm or self.scale_embedding:
             logger.info("This configuration is a mixture of MBART and BART settings")
         return False
+
+    def enable_gradient_checkpointing(self):
+        self.gradient_checkpointing = True

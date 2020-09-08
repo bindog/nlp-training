@@ -767,6 +767,7 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin):
         output_loading_info = kwargs.pop("output_loading_info", False)
         local_files_only = kwargs.pop("local_files_only", False)
         use_cdn = kwargs.pop("use_cdn", True)
+        gradient_checkpointing = kwargs.pop("gradient_checkpointing", False)
 
         # Load config if we don't provide a configuration
         if not isinstance(config, PretrainedConfig):
@@ -782,6 +783,8 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin):
                 local_files_only=local_files_only,
                 **kwargs,
             )
+            if gradient_checkpointing:
+                config.enable_gradient_checkpointing()
         else:
             model_kwargs = kwargs
 

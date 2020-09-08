@@ -352,24 +352,21 @@ class BartEncoder(nn.Module):
             if self.training and (dropout_probability < self.layerdrop):  # skip the layer
                 attn = None
             else:
-                # if self.gradient_checkpointing:
-                #     def create_custom_forward(module):
-                #         def custom_forward(*inputs):
-                #             return module(*inputs, output_attentions=output_attentions)
+                if self.gradient_checkpointing:
+                    def create_custom_forward(module):
+                        def custom_forward(*inputs):
+                            return module(*inputs, output_attentions=output_attentions)
 
-                #         return custom_forward
+                        return custom_forward
 
-                #     x, attn = torch.utils.checkpoint.checkpoint(
-                #         create_custom_forward(encoder_layer),
-                #         x,
-                #         attention_mask
-                #     )
-                # else:
-                #     x, attn = encoder_layer(x, attention_mask, output_attentions=output_attentions)
-
-                x, attn = encoder_layer(x, attention_mask, output_attentions=output_attentions)
-                attn = None if attn.byte().item() == 0 else attn
-
+                    x, attn = torch.utils.checkpoint.checkpoint(
+                        create_custom_forward(encoder_layer),
+                        x,
+                        attention_mask
+                    )
+                    attn = None if attn.byte().item() == 0 else attn
+                else:
+                    x, attn = encoder_layer(x, attention_mask, output_attentions=output_attentions)
 
             if output_attentions:
                 all_attentions = all_attentions + (attn,)
@@ -395,7 +392,6 @@ class DecoderLayer(nn.Module):
         self.embed_dim = config.d_model
 
         self.gradient_checkpointing = getattr(config, "gradient_checkpointing", False) and self.training
-        print("debug gradient_checkpointing set in DecoderLayer:", self.gradient_checkpointing)
         self.self_attn = Attention(
             embed_dim=self.embed_dim,
             num_heads=config.decoder_attention_heads,
@@ -525,7 +521,6 @@ class BartDecoder(nn.Module):
         super().__init__()
         self.dropout = config.dropout
         self.gradient_checkpointing = getattr(config, "gradient_checkpointing", False) and self.training
-        print("debug gradient_checkpointing BartDecoder: ", self.gradient_checkpointing)
         self.layerdrop = config.decoder_layerdrop
         self.padding_idx = embed_tokens.padding_idx
         self.max_target_positions = config.max_position_embeddings
