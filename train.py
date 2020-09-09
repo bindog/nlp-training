@@ -365,7 +365,8 @@ def eval_loop(args, model, eval_dataloader, label_map):
             table.add_data(raw_text_0, summary_text[0], label_text[0])
         avg_score, scores = evaluate_bleu(summary_list, references_list)
         logger.info("BLEU average score: " + str(round(avg_score, 4)))
-        wandb.log({"examples": table})
+        if not args.debug:
+            wandb.log({"examples": table})
 
 
 def main():
