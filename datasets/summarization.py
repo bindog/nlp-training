@@ -12,7 +12,7 @@ logging.basicConfig(level=logging.INFO, format="[%(asctime)s %(filename)s %(line
 logger = logging.getLogger(__name__)
 
 
-def process_chunk(chunk, tokenizer, max_source_length=1024, max_target_length=56):
+def process_chunk(chunk, tokenizer, max_source_length=1024, max_target_length=56, crosslingual=False):
     all_input_ids = []
     all_attention_mask = []
     all_label_ids = []
@@ -24,7 +24,12 @@ def process_chunk(chunk, tokenizer, max_source_length=1024, max_target_length=56
             continue
         info = json.loads(line.strip())
         raw_text = info["text"]
-        summary = info["summary"]
+        if crosslingual:
+            # sl_summary = info["sl_summary"]
+            # target language summary
+            summary = info["tl_summary"]
+        else:
+            summary = info["summary"]
 
         source_tokenized = tokenizer.batch_encode_plus(
                 [raw_text], max_length=max_source_length, truncation=True, padding="max_length", return_tensors=None
@@ -73,7 +78,7 @@ def split_chunks(filename, grain=10000):
 
 
 class SummarizationDataset(torch.utils.data.Dataset):
-    def __init__(self, json_path, tokenizer, max_source_length=1024, max_target_length=56):
+    def __init__(self, json_path, tokenizer, max_source_length=1024, max_target_length=56, crosslingual=False):
         """Initiate Textclf Dataset dataset.
         Arguments:
             json_path: dataset json file
@@ -97,6 +102,7 @@ class SummarizationDataset(torch.utils.data.Dataset):
                 repeat(tokenizer),
                 repeat(max_source_length),
                 repeat(max_target_length),
+                repeat(crosslingual),
             )
         )
 
