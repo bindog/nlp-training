@@ -269,7 +269,7 @@ class EncoderLayer(nn.Module):
         if not self.normalize_before:
             x = self.final_layer_norm(x)
         if attn_weights is None and self.gradient_checkpointing:
-            attn_weights = torch.zeros(1)
+            attn_weights = torch.zeros(1, requires_grad=True)
         return x, attn_weights
 
 
