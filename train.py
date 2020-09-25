@@ -54,6 +54,8 @@ from optimization import AdamW, get_linear_schedule_with_warmup
 # check fp16 settings
 _use_native_amp = False
 _use_apex = False
+# which version am i now
+VERSION = 'V1.1' # add some wandb seeting
 
 # Check if Pytorch version >= 1.6 to switch between Native AMP and Apex
 if version.parse(torch.__version__) < version.parse("1.6"):
@@ -301,6 +303,12 @@ def eval_loop(args, model, eval_dataloader, label_map):
 
         report = classification_report(y_true, y_pred, digits=4)
         logger.info("\n%s", report)
+        eval_precision = precision_score(y_true, y_pred)
+        eval_recall = recall_score(y_true, y_pred)
+        eval_f1 = f1_score(y_true, y_pred)
+        if not args.debug:
+            wandb.log({"eval_precision": eval_precision, "eval_recall": eval_recall, "eval_f1": eval_f1})
+
     elif args.task_name == "textclf":
         _all_logits = []
         _all_labels = []
@@ -504,9 +512,13 @@ def main():
                         action='store_true',
                         help="in debug mode, will not enable wandb log")
     args = parser.parse_args()
+    args.output_dir = args.output_dir + '/' + VERSION
 
     if not args.debug:
-        wandb.init(project="nlp-task")
+        wandb.init(project="nlp-task", dir=args.output_dir)
+        wandb.run.name = VERSION + '-' + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()) 
+        wandb.config.update(args)
+        wandb.run.save()
 
     if args.no_cuda:
         logger.info("can not train without GPU")
