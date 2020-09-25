@@ -45,7 +45,7 @@ from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
 
-from models.modeling_nezha import (NeZhaForSequenceClassification, NeZhaForTokenClassification,
+from models.modeling_nezha import (NeZhaForSequenceClassification, NeZhaForTokenClassification, NeZhaBiLSTMForTokenClassification,
                             NeZhaForDocumentClassification, NeZhaForDocumentTagClassification,
                             NeZhaForTagClassification, NeZhaConfig, WEIGHTS_NAME, CONFIG_NAME)
 
@@ -55,7 +55,7 @@ from optimization import AdamW, get_linear_schedule_with_warmup
 _use_native_amp = False
 _use_apex = False
 # which version am i now
-VERSION = 'V1.1' # add some wandb seeting
+VERSION = 'V1.2' # add BiLSTM and CRF
 
 # Check if Pytorch version >= 1.6 to switch between Native AMP and Apex
 if version.parse(torch.__version__) < version.parse("1.6"):
@@ -102,9 +102,13 @@ def get_tokenizer(args):
     return tokenizer
 
 
-def get_model(args, bert_config, num_labels):
+def get_model(args, bert_config, label_map, num_labels):
     if args.task_name == "ner":
-        return NeZhaForTokenClassification(bert_config, num_labels=num_labels)
+        if args.ner_addBilstm:
+            logger.info('Use BiLSTM in NER Model.')
+            return NeZhaBiLSTMForTokenClassification(bert_config, label_map, num_labels=num_labels)
+        else:
+            return NeZhaForTokenClassification(bert_config, num_labels=num_labels)
     elif args.task_name == "textclf":
         if args.model_name == "longformer":
             from models.configuration_longformer import LongformerConfig
@@ -220,6 +224,8 @@ def train_loop(args, model, train_dataloader, optimizer, lr_scheduler, num_gpus,
             with autocast():
                 outputs = model(**inputs)
                 loss = outputs[0]
+        elif args.ner_addBilstm:
+            loss = model.neg_log_likelihood(**inputs)
         else:
             outputs = model(**inputs)
             # We don't use .loss here since the model may return tuples instead of ModelOutput.
@@ -273,7 +279,7 @@ def eval_loop(args, model, eval_dataloader, label_map):
     eval_func = None
 
     if args.task_name == "ner":
-        from seqeval.metrics import classification_report
+        from seqeval.metrics import classification_report, precision_score, recall_score, f1_score 
         y_true = []
         y_pred = []
         for step, batch in enumerate(tqdm(eval_dataloader, desc="Evaluating")):
@@ -282,8 +288,11 @@ def eval_loop(args, model, eval_dataloader, label_map):
             inputs["labels"] = None
 
             with torch.no_grad():
-                logits = model(**inputs)
-                logits = torch.argmax(F.log_softmax(logits, dim=2), dim=2)
+                if args.ner_addBilstm:
+                    logits = model(**inputs)
+                else:
+                    logits = model(**inputs)
+                    logits = torch.argmax(F.log_softmax(logits, dim=2), dim=2)
 
             logits = logits.detach().cpu().numpy()
             label_ids = label_ids.to('cpu').numpy()
@@ -511,6 +520,9 @@ def main():
     parser.add_argument('--debug',
                         action='store_true',
                         help="in debug mode, will not enable wandb log")
+    parser.add_argument('--ner_addBilstm',
+                        action='store_true',
+                        help="Is bilstm model used.")
     args = parser.parse_args()
     args.output_dir = args.output_dir + '/' + VERSION
 
@@ -613,12 +625,12 @@ def main():
         if args.trained_model_dir:
             logger.info('init nezha model from user fine-tune model...')
             config = NeZhaConfig().from_json_file(os.path.join(args.trained_model_dir, 'bert_config.json'))
-            model = get_model(args, config, num_labels=num_labels)
+            model = get_model(args, config, label_map_reverse, num_labels=num_labels)
             model.load_state_dict(torch.load(os.path.join(args.trained_model_dir, WEIGHTS_NAME)))
         elif args.bert_model:
             logger.info('init nezha model from original pretrained model...')
             config = NeZhaConfig().from_json_file(os.path.join(args.bert_model, 'bert_config.json'))
-            model = get_model(args, config, num_labels=num_labels)
+            model = get_model(args, config, label_map_reverse, num_labels=num_labels)
             utils.torch_show_all_params(model)
             utils.torch_init_model(model, os.path.join(args.bert_model, 'pytorch_model.bin'))
     elif args.model_name == "longformer":
