@@ -45,7 +45,7 @@ class SummarizationInferenceService(object):
         return "".join(summary_text)
 
 
-class TextclfInfercenceService(object):
+class TextclfInferenceService(object):
     def __init__(self, model_dir, encode_document=False, doc_inner_batch_size=5, tag=False, **kwargs):
         with open(os.path.join(model_dir, "label_map")) as f:
             label_map = json.loads(f.read().strip())

@@ -43,7 +43,7 @@ if __name__ == '__main__':
     if opt.task == "ner":
         from tools.inference import NERInferenceService as InferenceService
     elif opt.task == "textclf" or opt.task == "tag":
-        from tools.inference import TextclfInfercenceService as InferenceService
+        from tools.inference import TextclfInferenceService as InferenceService
     recognizer = InferenceService(
                             opt.model_dir,
                             encode_document=opt.encode_document,

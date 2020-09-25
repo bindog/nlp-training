@@ -79,7 +79,7 @@ if __name__ == '__main__':
     if opt.task == "ner":
         from tools.inference import NERInferenceService as InferenceService
     elif opt.task == "textclf" or opt.task == "tag":
-        from tools.inference import TextclfInfercenceService as InferenceService
+        from tools.inference import TextclfInferenceService as InferenceService
     elif opt.task == "summary":
         from tools.inference import SummarizationInferenceService as InferenceService
     recognizer = InferenceService(
