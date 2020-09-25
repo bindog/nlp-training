@@ -275,11 +275,12 @@ def eval_loop(args, model, eval_dataloader, label_map):
         y_true = []
         y_pred = []
         for step, batch in enumerate(tqdm(eval_dataloader, desc="Evaluating")):
-            batch = tuple(t.cuda() for t in batch)
-            input_ids, input_mask, segment_ids, label_ids = batch
+            inputs = {k: v.cuda() for k, v in batch.items()}
+            label_ids = inputs["labels"]
+            inputs["labels"] = None
 
             with torch.no_grad():
-                logits = model(input_ids, segment_ids, input_mask, None)
+                logits = model(**inputs)
                 logits = torch.argmax(F.log_softmax(logits, dim=2), dim=2)
 
             logits = logits.detach().cpu().numpy()
@@ -290,13 +291,13 @@ def eval_loop(args, model, eval_dataloader, label_map):
                 for j, m in enumerate(label):
                     if j == 0:
                         continue
-                    elif label_map_reverse[label_ids[i][j]] == "[SEP]":
+                    elif label_map[label_ids[i][j]] == "[SEP]":
                         y_true.append(temp_1)
                         y_pred.append(temp_2)
                         break
                     else:
-                        temp_1.append(label_map_reverse[label_ids[i][j]])
-                        temp_2.append(label_map_reverse[logits[i][j]])
+                        temp_1.append(label_map[label_ids[i][j]])
+                        temp_2.append(label_map[logits[i][j]])
 
         report = classification_report(y_true, y_pred, digits=4)
         logger.info("\n%s", report)
