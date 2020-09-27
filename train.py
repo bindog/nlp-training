@@ -180,6 +180,9 @@ def get_optimizer_and_scheduler(args, model, num_training_steps):
 
 
 def get_dataloader(args, tokenizer, num_labels, split):
+    # speed up for debug
+    if args.debug:
+        split = "dev"
     json_file = get_split_path(args.data_dir, split)
     if args.task_name == "ner":
         from datasets.ner import NERDataset
@@ -267,6 +270,8 @@ def train_loop(args, model, train_dataloader, optimizer, lr_scheduler, num_gpus,
                 p.set_postfix(loss=round(loss.item(), 4))
                 wandb.log({"epoch": epoch, "step": step, "train_loss": loss.item(),
                            "learning_rate": lr_scheduler.get_last_lr()[0]})
+        if args.debug:
+            break
 
 
 def eval_loop(args, model, eval_dataloader, label_map):
@@ -278,11 +283,12 @@ def eval_loop(args, model, eval_dataloader, label_map):
         y_true = []
         y_pred = []
         for step, batch in enumerate(tqdm(eval_dataloader, desc="Evaluating")):
-            batch = tuple(t.cuda() for t in batch)
-            input_ids, input_mask, segment_ids, label_ids = batch
+            inputs = {k: v.cuda() for k, v in batch.items()}
+            label_ids = inputs["labels"]
+            inputs["labels"] = None
 
             with torch.no_grad():
-                logits = model(input_ids, segment_ids, input_mask, None)
+                logits = model(**inputs)
                 logits = torch.argmax(F.log_softmax(logits, dim=2), dim=2)
 
             logits = logits.detach().cpu().numpy()
@@ -293,14 +299,16 @@ def eval_loop(args, model, eval_dataloader, label_map):
                 for j, m in enumerate(label):
                     if j == 0:
                         continue
-                    elif label_map_reverse[label_ids[i][j]] == "[SEP]":
+                    elif label_map[label_ids[i][j]] == "[SEP]":
                         y_true.append(temp_1)
                         y_pred.append(temp_2)
                         break
                     else:
-                        temp_1.append(label_map_reverse[label_ids[i][j]])
-                        temp_2.append(label_map_reverse[logits[i][j]])
+                        temp_1.append(label_map[label_ids[i][j]])
+                        temp_2.append(label_map[logits[i][j]])
 
+            if args.debug:
+                break
         report = classification_report(y_true, y_pred, digits=4)
         logger.info("\n%s", report)
     elif args.task_name == "textclf":
@@ -311,9 +319,10 @@ def eval_loop(args, model, eval_dataloader, label_map):
             label_ids = inputs["labels"]
             # ignore labels for inference
             inputs["labels"] = None
-            logits = model(**inputs)
-            if isinstance(logits, tuple):
-                logits = logits[0]
+            with torch.no_grad():
+                logits = model(**inputs)
+                if isinstance(logits, tuple):
+                    logits = logits[0]
             _all_logits.append(logits.detach().cpu())
             _all_labels.append(label_ids.detach().cpu())
         all_logits = torch.cat(_all_logits, 0)
@@ -331,11 +340,15 @@ def eval_loop(args, model, eval_dataloader, label_map):
         for step, batch in enumerate(tqdm(eval_dataloader, desc="Evaluating")):
             batch = tuple(t.cuda() for t in batch)
             if args.encode_document:
+                # TODO fix
                 document_batch, label_ids = batch
-                logits = model(document_batch, None)
+                with torch.no_grad():
+                    logits = model(document_batch, None)
             else:
+                # TODO fix
                 input_ids, input_mask, segment_ids, label_ids = batch
-                logits = model(input_ids, segment_ids, input_mask, None)
+                with torch.no_grad():
+                    logits = model(input_ids, segment_ids, input_mask, None)
             _all_logits.append(logits.detach().cpu())
             _all_labels.append(label_ids.detach().cpu())
         all_logits = torch.cat(_all_logits, 0)
@@ -355,6 +368,7 @@ def eval_loop(args, model, eval_dataloader, label_map):
             inputs = {k: v.cuda() for k, v in batch.items()}
             # FIXME we got some problems in this max length of summary in Datasets Class
             label_ids = inputs["labels"]
+            # FIXME do we need with torch.no_grad() here?
             summary_ids = model.generate(inputs['input_ids'], num_beams=4, max_length=56, early_stopping=True)
             summary_text = [args.tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in summary_ids]
             label_text = [args.tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in label_ids]

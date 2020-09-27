@@ -190,7 +190,12 @@ class NERDataset(Dataset):
         logger.info("ner dataset ready...")
 
     def __getitem__(self, i):
-        return self.all_input_ids[i], self.all_input_mask[i], self.all_segment_ids[i], self.all_label_ids[i]
+        return {
+            "input_ids": self.all_input_ids[i],
+            "attention_mask": self.all_input_mask[i],
+            "token_type_ids": self.all_segment_ids[i],
+            "labels": self.all_label_ids[i]
+        }
 
     def __len__(self):
         return len(self.all_input_ids)
