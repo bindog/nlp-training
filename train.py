@@ -528,7 +528,7 @@ def main():
 
     if not args.debug:
         wandb.init(project="nlp-task", dir=args.output_dir)
-        wandb.run.name = VERSION + '-' + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()) 
+        wandb.run.name = VERSION + '-' + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         wandb.config.update(args)
         wandb.run.save()
 
