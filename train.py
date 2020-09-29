@@ -197,7 +197,7 @@ def get_dataloader(args, tokenizer, num_labels, split):
         dataset = TextclfDataset(json_file, tokenizer, num_labels, args.doc_inner_batch_size, args.max_seq_length, args.encode_document, longformer, tag=True)
     elif args.task_name == "summary":
         from datasets.summarization import SummarizationDataset
-        dataset = SummarizationDataset(json_file, tokenizer)
+        dataset = SummarizationDataset(json_file, tokenizer, max_target_length=args.max_summarization_length)
     if args.distributed:
         sampler = DistributedSampler(dataset)
     else:
@@ -526,6 +526,9 @@ def main():
                         help="Loss scaling to improve fp16 numeric stability. Only used when fp16 set to True.\n"
                              "0 (default value): dynamic loss scaling.\n"
                              "Positive power of 2: static loss scaling value.\n")
+    parser.add_argument("--max_summarization_length",
+                       type=int, default=56,
+                       help="max summarization text length")
     parser.add_argument('--debug',
                         action='store_true',
                         help="in debug mode, will not enable wandb log")
