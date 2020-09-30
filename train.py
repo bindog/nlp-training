@@ -369,7 +369,7 @@ def eval_loop(args, model, eval_dataloader, label_map):
             # FIXME we got some problems in this max length of summary in Datasets Class
             label_ids = inputs["labels"]
             # FIXME do we need with torch.no_grad() here?
-            summary_ids = model.generate(inputs['input_ids'], num_beams=4, max_length=56, early_stopping=True)
+            summary_ids = model.generate(inputs['input_ids'], num_beams=4, max_length=args.max_summarization_length, early_stopping=True)
             summary_text = [args.tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in summary_ids]
             label_text = [args.tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in label_ids]
             summary_list.extend(summary_text)
