@@ -55,7 +55,7 @@ from optimization import AdamW, get_linear_schedule_with_warmup
 _use_native_amp = False
 _use_apex = False
 # which version am i now
-VERSION = 'V1.2' # add BiLSTM and CRF
+VERSION = 'Summerization-V1.0' # Summerization v1.0
 
 # Check if Pytorch version >= 1.6 to switch between Native AMP and Apex
 if version.parse(torch.__version__) < version.parse("1.6"):
@@ -151,6 +151,16 @@ def get_model(args, bert_config, label_map, num_labels):
             model.freeze_encoder()
             model.unfreeze_encoder_last_layers()
         return model
+    elif args.task_name == "translation":
+        from models.modeling_mbart import MBartForConditionalGeneration
+        gradient_checkpointing_flag = True if args.gradient_checkpointing else False
+        if gradient_checkpointing_flag:
+            logger.info("gradient checkpointing enabled")
+        model = MBartForConditionalGeneration.from_pretrained("facebook/mbart-large-cc25", gradient_checkpointing=gradient_checkpointing_flag)
+        if args.freeze_encoder:
+            model.freeze_encoder()
+            model.unfreeze_encoder_last_layers()
+        return model
     else:
         logger.error("task type not supported!")
         return None
@@ -204,6 +214,9 @@ def get_dataloader(args, tokenizer, num_labels, split):
     elif args.task_name == "summary":
         from datasets.summarization import SummarizationDataset
         dataset = SummarizationDataset(json_file, tokenizer)
+    elif args.task_name == "translation":
+        from datasets.translation import TranslationDataset
+        dataset = TranslationDataset(json_file, tokenizer)
     if args.distributed:
         sampler = DistributedSampler(dataset)
     else:
@@ -395,6 +408,28 @@ def eval_loop(args, model, eval_dataloader, label_map):
             raw_text_0 = args.tokenizer.decode(inputs['input_ids'][0], skip_special_tokens=True, clean_up_tokenization_spaces=False)
             table.add_data(raw_text_0, summary_text[0], label_text[0])
         avg_score, scores = evaluate_bleu(summary_list, references_list)
+        logger.info("BLEU average score: " + str(round(avg_score, 4)))
+        if not args.debug:
+            wandb.log({"examples": table})
+    elif args.task_name == "translation":
+        from evaluation.summarization_eval import evaluate_bleu
+        table = wandb.Table(columns=["Text", "Predicted translation", "Reference translation"])
+        translation_list = []
+        references_list = []
+        for step, batch in enumerate(tqdm(eval_dataloader, desc="Evaluating")):
+            inputs = {k: v.cuda() for k, v in batch.items()}
+            # FIXME we got some problems in this max length of summary in Datasets Class
+            label_ids = inputs["labels"]
+            # FIXME do we need with torch.no_grad() here?
+            translation_ids = model.generate(inputs['input_ids'], num_beams=4, max_length=56, early_stopping=True)
+            translation_text = [args.tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in translation_ids]
+            label_text = [args.tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in label_ids]
+            translation_list.extend(translation_text)
+            references_list.extend(label_text)
+            # get the first example from batch as wandb case
+            raw_text_0 = args.tokenizer.decode(inputs['input_ids'][0], skip_special_tokens=True, clean_up_tokenization_spaces=False)
+            table.add_data(raw_text_0, translation_text[0], label_text[0])
+        avg_score, scores = evaluate_bleu(translation_list, references_list)
         logger.info("BLEU average score: " + str(round(avg_score, 4)))
         if not args.debug:
             wandb.log({"examples": table})
@@ -661,7 +696,7 @@ def main():
         model = get_model(args, None, num_labels=num_labels)
     elif args.model_name == "bart":
         logger.info('init bart model from original pretrained model...')
-        model = get_model(args, None, num_labels=num_labels)
+        model = get_model(args, None, None, num_labels=num_labels)
 
     # check model details on wandb
     if not args.debug:
