@@ -55,7 +55,7 @@ from optimization import AdamW, get_linear_schedule_with_warmup
 _use_native_amp = False
 _use_apex = False
 # which version am i now
-VERSION = 'Summerization-V1.0' # Summerization v1.0
+VERSION = 'Translation-V1.0' # Translation v1.0
 
 # Check if Pytorch version >= 1.6 to switch between Native AMP and Apex
 if version.parse(torch.__version__) < version.parse("1.6"):
@@ -432,7 +432,7 @@ def eval_loop(args, model, eval_dataloader, label_map):
         avg_score, scores = evaluate_bleu(translation_list, references_list)
         logger.info("BLEU average score: " + str(round(avg_score, 4)))
         if not args.debug:
-            wandb.log({"examples": table})
+            wandb.log({"examples": table, "score_BLEU": avg_score})
 
 
 def main():
@@ -469,6 +469,11 @@ def main():
                         type=str,
                         required=True,
                         help="The output directory where the model predictions and checkpoints will be written.")
+    parser.add_argument("--corpus",
+                        default='NoneSet',
+                        type=str,
+                        required=True,
+                        help="Corpus used .")
 
     ## Other parameters
     parser.add_argument("--cache_dir",
@@ -585,11 +590,11 @@ def main():
                         action='store_true',
                         help="Is bilstm model used.")
     args = parser.parse_args()
-    args.output_dir = args.output_dir + '/' + VERSION
+    args.output_dir = args.output_dir + '/' + VERSION + '/' + args.corpus
 
     if not args.debug:
         wandb.init(project="nlp-task", dir=args.output_dir)
-        wandb.run.name = VERSION + '-' + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        wandb.run.name = VERSION + '-' + args.corpus + '-' + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         wandb.config.update(args)
         wandb.run.save()
 
