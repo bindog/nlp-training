@@ -67,19 +67,16 @@ def process_chunk(chunk, tokenizer, max_source_length=1024, max_target_length=10
         tgt_lang = info["tgt_lang"]
 
         batch = tokenizer.prepare_seq2seq_batch(
-            src_texts=raw_text, src_lang=src_lang, tgt_texts=translation_text, tgt_lang=tgt_lang,
+            raw_text, src_lang=src_lang, tgt_texts=translation_text, tgt_lang=tgt_lang,
             max_length=max_source_length, max_target_length=max_target_length, padding="max_length", return_tensors=None
         )
         input_ids = batch["input_ids"]
-        target_ids = batch["decoder_input_ids"]
-        decoder_input_ids = target_ids[:, :-1].contiguous()
-        labels = target_ids[:, 1:].clone()
+        labels = batch["labels"]
 
         all_input_ids.append(input_ids)
-        all_decoder_input_ids.append(decoder_input_ids)
         all_labels_ids.append(labels)
 
-    return all_input_ids, all_decoder_input_ids, all_labels_ids
+    return all_input_ids, all_labels_ids
 
 
 def split_chunks(filename, grain=10000):
@@ -140,7 +137,7 @@ class TranslationDataset(torch.utils.data.Dataset):
                 repeat(tokenizer),
                 repeat(max_source_length),
                 repeat(max_target_length),
-                repeat(crosslingual),
+                # repeat(crosslingual),
             )
         )
 
@@ -148,15 +145,13 @@ class TranslationDataset(torch.utils.data.Dataset):
         for parts in zip(*results):
             all_results.append(list(chain(*parts)))
         self.all_input_ids = torch.tensor(all_results[0], dtype=torch.long)
-        self.all_decoder_input_ids = torch.tensor(all_results[1], dtype=torch.long)
-        self.all_label_ids = torch.tensor(all_results[2], dtype=torch.long)
+        self.all_label_ids = torch.tensor(all_results[1], dtype=torch.long)
         logger.info("translation dataset ready...")
 
 
     def __getitem__(self, i):
         return {
             "input_ids": self.all_input_ids[i],
-            "decoder_input_ids": self.all_decoder_input_ids[i],
             "labels": self.all_label_ids[i]
         }
 

@@ -735,6 +735,191 @@ class NeZhaForTokenClassification(BertPreTrainedModel):
             return logits
 
 
+class NeZhaBiLSTMForTokenClassification(BertPreTrainedModel):
+    
+    """BERT-BiLSTM-CRF model for NER task.
+    This module is composed of the NeZhaForTokenClassification model with a BiLSTM layer and a CRF layer on top of
+    the pooled output.
+
+    Params:
+        `config`: a BertConfig class instance with the configuration to build a new model.
+        `label_map_reverse`: a map of label_name to label_id.
+        `num_labels`: the number of classes for the classifier. Default = 2.
+
+    Inputs:
+        `input_ids`: a torch.LongTensor of shape [batch_size, sequence_length]
+            with the word token indices in the vocabulary(see the tokens preprocessing logic in the scripts
+            `extract_features.py`, `run_classifier.py` and `run_squad.py`)
+        `token_type_ids`: an optional torch.LongTensor of shape [batch_size, sequence_length] with the token
+            types indices selected in [0, 1]. Type 0 corresponds to a `sentence A` and type 1 corresponds to
+            a `sentence B` token (see BERT paper for more details).
+        `attention_mask`: an optional torch.LongTensor of shape [batch_size, sequence_length] with indices
+            selected in [0, 1]. It's a mask to be used if the input sequence length is smaller than the max
+            input sequence length in the current batch. It's the mask that we typically use for attention when
+            a batch has varying length sentences.
+        `labels`: labels for the classification output: torch.LongTensor of shape [batch_size]
+            with indices selected in [0, ..., num_labels].
+
+    Outputs:
+        if `labels` is not `None`:
+            Outputs the CrossEntropy classification loss of the output with the labels.
+        if `labels` is `None`:
+            Outputs the classification logits of shape [batch_size, num_labels].
+
+    Example usage:
+    ```python
+    # Already been converted into WordPiece token ids
+    input_ids = torch.LongTensor([[31, 51, 99], [15, 5, 0]])
+    input_mask = torch.LongTensor([[1, 1, 1], [1, 1, 0]])
+    token_type_ids = torch.LongTensor([[0, 0, 1], [0, 1, 0]])
+    label_ids = torch.LongTensor([[16, 1, 0], [16, 3, 0]])
+
+    label_map_reverse = {"I-COM": "15", "[CLS]": "16",}
+    config = BertConfig(vocab_size_or_config_json_file=32000, hidden_size=768,
+        num_hidden_layers=12, num_attention_heads=12, intermediate_size=3072)
+
+    num_labels = 2
+    model = BertForSequenceClassification(config, label_map_reverse, num_labels)
+
+    # In train step, we use neg_log_likelihood to get loss.
+    loss = model.neg_log_likelihood(input_ids, token_type_ids, input_mask, label_ids)
+
+    # In eval step, we use model to get result.
+    logits = model(input_ids, segment_ids, input_mask, None)
+    ```
+    """
+    def __init__(self, config, label_map_reverse, num_labels):
+        super(NeZhaBiLSTMForTokenClassification, self).__init__(config)
+        self.num_labels = num_labels
+        self.label_map_reverse = label_map_reverse
+        self.hidden_size = config.hidden_size
+        self.bert = NeZhaModel(config)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.bilstm = nn.LSTM(bidirectional=True, num_layers=2, input_size=config.hidden_size, hidden_size=config.hidden_size//2, batch_first=True)
+        self.classifier = nn.Linear(config.hidden_size, self.num_labels)
+        self.start_label_id = self.label_map_reverse['[CLS]']
+        self.transitions = nn.Parameter(torch.randn(
+            self.num_labels, self.num_labels
+        ))
+        self.apply(self._init_weights)
+    
+    def _viterbi_decode(self, feats):
+        '''
+        Max-Product Algorithm or viterbi algorithm, argmax(p(z_0:t|x_0:t))
+        '''
+        
+        # T = self.max_seq_length
+        T = feats.shape[1]
+        batch_size = feats.shape[0]
+
+        # batch_transitions=self.transitions.expand(batch_size,self.num_labels,self.num_labels)
+
+        log_delta = torch.Tensor(batch_size, 1, self.num_labels).fill_(-10000.).cuda()
+        log_delta[:, 0, self.start_label_id] = 0.
+        
+        # psi is for the vaule of the last latent that make P(this_latent) maximum.
+        psi = torch.zeros((batch_size, T, self.num_labels), dtype=torch.long)  # psi[0]=0000 useless
+        for t in range(1, T):
+            # delta[t][k]=max_z1:t-1( p(x1,x2,...,xt,z1,z2,...,zt-1,zt=k|theta) )
+            # delta[t] is the max prob of the path from  z_t-1 to z_t[k]
+            log_delta, psi[:, t] = torch.max(self.transitions + log_delta, -1)
+            # psi[t][k]=argmax_z1:t-1( p(x1,x2,...,xt,z1,z2,...,zt-1,zt=k|theta) )
+            # psi[t][k] is the path choosed from z_t-1 to z_t[k],the value is the z_state(is k) index of z_t-1
+            log_delta = (log_delta + feats[:, t]).unsqueeze(1)
+
+        # trace back
+        path = torch.zeros((batch_size, T), dtype=torch.long)
+
+        # max p(z1:t,all_x|theta)
+        max_logLL_allz_allx, path[:, -1] = torch.max(log_delta.squeeze(), -1)
+
+        for t in range(T-2, -1, -1):
+            # choose the state of z_t according the state choosed of z_t+1.
+            path[:, t] = psi[:, t+1].gather(-1,path[:, t+1].view(-1,1)).squeeze()
+
+        return max_logLL_allz_allx, path
+    
+    def log_sum_exp_batch(self, log_Tensor, axis=-1): # shape (batch_size,n,m)
+        return torch.max(log_Tensor, axis)[0] + \
+            torch.log(torch.exp(log_Tensor-torch.max(log_Tensor, axis)[0].view(log_Tensor.shape[0],-1,1)).sum(axis))
+    
+    def _forward_alg(self, feats):
+        '''
+        this also called alpha-recursion or forward recursion, to calculate log_prob of all barX 
+        '''
+        
+        # T = self.max_seq_length
+        T = feats.shape[1]  
+        batch_size = feats.shape[0]
+        
+        # alpha_recursion,forward, alpha(zt)=p(zt,bar_x_1:t)
+        log_alpha = torch.Tensor(batch_size, 1, self.num_labels).fill_(-10000.).cuda()  #[batch_size, 1, 16]
+        # normal_alpha_0 : alpha[0]=Ot[0]*self.PIs
+        # self.start_label has all of the score. it is log,0 is p=1
+        log_alpha[:, 0, self.start_label_id] = 0
+        
+        # feats: sentances -> word embedding -> lstm -> MLP -> feats
+        # feats is the probability of emission, feat.shape=(1,tag_size)
+        for t in range(1, T):
+            log_alpha = (self.log_sum_exp_batch(self.transitions + log_alpha, axis=-1) + feats[:, t]).unsqueeze(1)
+
+        # log_prob of all barX
+        log_prob_all_barX = self.log_sum_exp_batch(log_alpha)
+        return log_prob_all_barX
+    
+    def _score_sentence(self, feats, label_ids):
+        T = feats.shape[1]
+        batch_size = feats.shape[0]
+
+        batch_transitions = self.transitions.expand(batch_size,self.num_labels,self.num_labels)
+        batch_transitions = batch_transitions.flatten(1)
+
+        score = torch.zeros((feats.shape[0],1)).cuda()
+        # the 0th node is start_label->start_word,the probability of them=1. so t begin with 1.
+        for t in range(1, T):
+            score = score + \
+                batch_transitions.gather(-1, (label_ids[:, t]*self.num_labels+label_ids[:, t-1]).view(-1,1)) \
+                    + feats[:, t].gather(-1, label_ids[:, t].view(-1,1)).view(-1,1)
+        return score
+    
+    def neg_log_likelihood(self, input_ids, token_type_ids, attention_mask, labels):
+        feats = self._get_lstm_features(input_ids, token_type_ids, attention_mask)  #[batch_size, max_len, 16]
+        forward_score = self._forward_alg(feats)
+        gold_score = self._score_sentence(feats, labels)
+        return torch.mean(forward_score - gold_score)
+
+    def _get_lstm_features(self, input_ids, token_type_ids, attention_mask):
+        """sentence is the ids"""
+        # self.hidden = self.init_hidden()
+        sequence_output, pooled_output = self.bert(input_ids, token_type_ids, attention_mask,
+                                     output_all_encoded_layers=False)
+        rnn_out, _ = self.bilstm(sequence_output)
+        sequence_output = self.dropout(rnn_out)
+        logits = self.classifier(sequence_output)
+        return logits  # [8, 75, 16]
+
+    def forward(self, input_ids, token_type_ids=None, attention_mask=None, labels=None):
+        
+        logits = self._get_lstm_features(input_ids, token_type_ids, attention_mask)  # [8, 180,768]
+        score, logits = self._viterbi_decode(logits)
+
+        loss = None
+        if labels is not None:
+            loss_fct = CrossEntropyLoss()
+            # Only keep active parts of the loss
+            if attention_mask is not None:
+                active_loss = attention_mask.view(-1) == 1
+                active_logits = logits.view(-1, self.num_labels)
+                active_labels = torch.where(
+                    active_loss, labels.view(-1), torch.tensor(loss_fct.ignore_index).type_as(labels)
+                )
+                loss = loss_fct(active_logits, active_labels)
+            else:
+                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+            return loss
+        else:
+            return logits
+
 class NeZhaForMultipleChoice(BertPreTrainedModel):
     def __init__(self, config, num_choices=2):
         super(NeZhaForMultipleChoice, self).__init__(config)
