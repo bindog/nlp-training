@@ -45,7 +45,7 @@ from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
 
-from models.modeling_nezha import (NeZhaForSequenceClassification, NeZhaForTokenClassification,
+from models.modeling_nezha import (NeZhaForSequenceClassification, NeZhaForTokenClassification, NeZhaBiLSTMForTokenClassification,
                             NeZhaForDocumentClassification, NeZhaForDocumentTagClassification,
                             NeZhaForTagClassification, NeZhaConfig, WEIGHTS_NAME, CONFIG_NAME)
 
@@ -54,6 +54,8 @@ from optimization import AdamW, get_linear_schedule_with_warmup
 # check fp16 settings
 _use_native_amp = False
 _use_apex = False
+# which version am i now
+VERSION = 'Translation-V1.0' # Translation v1.0
 
 # Check if Pytorch version >= 1.6 to switch between Native AMP and Apex
 if version.parse(torch.__version__) < version.parse("1.6"):
@@ -100,9 +102,13 @@ def get_tokenizer(args):
     return tokenizer
 
 
-def get_model(args, bert_config, num_labels):
+def get_model(args, bert_config, label_map, num_labels):
     if args.task_name == "ner":
-        return NeZhaForTokenClassification(bert_config, num_labels=num_labels)
+        if args.ner_addBilstm:
+            logger.info('Use BiLSTM in NER Model.')
+            return NeZhaBiLSTMForTokenClassification(bert_config, label_map, num_labels=num_labels)
+        else:
+            return NeZhaForTokenClassification(bert_config, num_labels=num_labels)
     elif args.task_name == "textclf":
         if args.model_name == "longformer":
             from models.configuration_longformer import LongformerConfig
@@ -136,6 +142,16 @@ def get_model(args, bert_config, num_labels):
         else:
             return NeZhaForTagClassification(bert_config, num_labels=num_labels)
     elif args.task_name == "summary":
+        from models.modeling_mbart import MBartForConditionalGeneration
+        gradient_checkpointing_flag = True if args.gradient_checkpointing else False
+        if gradient_checkpointing_flag:
+            logger.info("gradient checkpointing enabled")
+        model = MBartForConditionalGeneration.from_pretrained("facebook/mbart-large-cc25", gradient_checkpointing=gradient_checkpointing_flag)
+        if args.freeze_encoder:
+            model.freeze_encoder()
+            model.unfreeze_encoder_last_layers()
+        return model
+    elif args.task_name == "translation":
         from models.modeling_mbart import MBartForConditionalGeneration
         gradient_checkpointing_flag = True if args.gradient_checkpointing else False
         if gradient_checkpointing_flag:
@@ -198,6 +214,9 @@ def get_dataloader(args, tokenizer, num_labels, split):
     elif args.task_name == "summary":
         from datasets.summarization import SummarizationDataset
         dataset = SummarizationDataset(json_file, tokenizer, max_target_length=args.max_summarization_length)
+    elif args.task_name == "translation":
+        from datasets.translation import TranslationDataset
+        dataset = TranslationDataset(json_file, tokenizer)
     if args.distributed:
         sampler = DistributedSampler(dataset)
     else:
@@ -224,6 +243,8 @@ def train_loop(args, model, train_dataloader, optimizer, lr_scheduler, num_gpus,
             with autocast():
                 outputs = model(**inputs)
                 loss = outputs[0]
+        elif args.ner_addBilstm:
+            loss = model.neg_log_likelihood(**inputs)
         else:
             outputs = model(**inputs)
             # We don't use .loss here since the model may return tuples instead of ModelOutput.
@@ -279,7 +300,7 @@ def eval_loop(args, model, eval_dataloader, label_map):
     eval_func = None
 
     if args.task_name == "ner":
-        from seqeval.metrics import classification_report
+        from seqeval.metrics import classification_report, precision_score, recall_score, f1_score
         y_true = []
         y_pred = []
         for step, batch in enumerate(tqdm(eval_dataloader, desc="Evaluating")):
@@ -288,8 +309,11 @@ def eval_loop(args, model, eval_dataloader, label_map):
             inputs["labels"] = None
 
             with torch.no_grad():
-                logits = model(**inputs)
-                logits = torch.argmax(F.log_softmax(logits, dim=2), dim=2)
+                if args.ner_addBilstm:
+                    logits = model(**inputs)
+                else:
+                    logits = model(**inputs)
+                    logits = torch.argmax(F.log_softmax(logits, dim=2), dim=2)
 
             logits = logits.detach().cpu().numpy()
             label_ids = label_ids.to('cpu').numpy()
@@ -311,6 +335,12 @@ def eval_loop(args, model, eval_dataloader, label_map):
                 break
         report = classification_report(y_true, y_pred, digits=4)
         logger.info("\n%s", report)
+        eval_precision = precision_score(y_true, y_pred)
+        eval_recall = recall_score(y_true, y_pred)
+        eval_f1 = f1_score(y_true, y_pred)
+        if not args.debug:
+            wandb.log({"eval_precision": eval_precision, "eval_recall": eval_recall, "eval_f1": eval_f1})
+
     elif args.task_name == "textclf":
         _all_logits = []
         _all_labels = []
@@ -381,6 +411,28 @@ def eval_loop(args, model, eval_dataloader, label_map):
         logger.info("BLEU average score: " + str(round(avg_score, 4)))
         if not args.debug:
             wandb.log({"examples": table})
+    elif args.task_name == "translation":
+        from evaluation.summarization_eval import evaluate_bleu
+        table = wandb.Table(columns=["Text", "Predicted translation", "Reference translation"])
+        translation_list = []
+        references_list = []
+        for step, batch in enumerate(tqdm(eval_dataloader, desc="Evaluating")):
+            inputs = {k: v.cuda() for k, v in batch.items()}
+            # FIXME we got some problems in this max length of summary in Datasets Class
+            label_ids = inputs["labels"]
+            # FIXME do we need with torch.no_grad() here?
+            translation_ids = model.generate(inputs['input_ids'], num_beams=4, max_length=56, early_stopping=True)
+            translation_text = [args.tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in translation_ids]
+            label_text = [args.tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in label_ids]
+            translation_list.extend(translation_text)
+            references_list.extend(label_text)
+            # get the first example from batch as wandb case
+            raw_text_0 = args.tokenizer.decode(inputs['input_ids'][0], skip_special_tokens=True, clean_up_tokenization_spaces=False)
+            table.add_data(raw_text_0, translation_text[0], label_text[0])
+        avg_score, scores = evaluate_bleu(translation_list, references_list)
+        logger.info("BLEU average score: " + str(round(avg_score, 4)))
+        if not args.debug:
+            wandb.log({"examples": table, "score_BLEU": avg_score})
 
 
 def main():
@@ -417,6 +469,11 @@ def main():
                         type=str,
                         required=True,
                         help="The output directory where the model predictions and checkpoints will be written.")
+    parser.add_argument("--corpus",
+                        default='NoneSet',
+                        type=str,
+                        required=True,
+                        help="Corpus used .")
 
     ## Other parameters
     parser.add_argument("--cache_dir",
@@ -532,10 +589,17 @@ def main():
     parser.add_argument('--debug',
                         action='store_true',
                         help="in debug mode, will not enable wandb log")
+    parser.add_argument('--ner_addBilstm',
+                        action='store_true',
+                        help="Is bilstm model used.")
     args = parser.parse_args()
+    args.output_dir = args.output_dir + '/' + VERSION + '/' + args.corpus
 
     if not args.debug:
-        wandb.init(project="nlp-task")
+        wandb.init(project="nlp-task", dir=args.output_dir)
+        wandb.run.name = VERSION + '-' + args.corpus + '-' + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        wandb.config.update(args)
+        wandb.run.save()
 
     if args.no_cuda:
         logger.info("can not train without GPU")
@@ -627,12 +691,12 @@ def main():
         if args.trained_model_dir:
             logger.info('init nezha model from user fine-tune model...')
             config = NeZhaConfig().from_json_file(os.path.join(args.trained_model_dir, 'bert_config.json'))
-            model = get_model(args, config, num_labels=num_labels)
+            model = get_model(args, config, label_map_reverse, num_labels=num_labels)
             model.load_state_dict(torch.load(os.path.join(args.trained_model_dir, WEIGHTS_NAME)))
         elif args.bert_model:
             logger.info('init nezha model from original pretrained model...')
             config = NeZhaConfig().from_json_file(os.path.join(args.bert_model, 'bert_config.json'))
-            model = get_model(args, config, num_labels=num_labels)
+            model = get_model(args, config, label_map_reverse, num_labels=num_labels)
             utils.torch_show_all_params(model)
             utils.torch_init_model(model, os.path.join(args.bert_model, 'pytorch_model.bin'))
     elif args.model_name == "longformer":
@@ -640,7 +704,7 @@ def main():
         model = get_model(args, None, num_labels=num_labels)
     elif args.model_name == "bart":
         logger.info('init bart model from original pretrained model...')
-        model = get_model(args, None, num_labels=num_labels)
+        model = get_model(args, None, None, num_labels=num_labels)
 
     # check model details on wandb
     if not args.debug:
