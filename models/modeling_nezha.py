@@ -18,7 +18,7 @@ from torch import nn
 from torch.nn import CrossEntropyLoss, BCEWithLogitsLoss
 
 from .configuration_bert import BertConfig
-from .modeling_bert import (BertIntermediate, BertLayerNorm, BertOutput, BertPooler,
+from .modeling_bert import (BertIntermediate, BertOutput, BertPooler,
                             BertPreTrainedModel, BertSelfOutput, BertSelfAttention,
                             BertOnlyMLMHead, BertPreTrainingHeads)
 
@@ -62,7 +62,7 @@ class NeZhaEmbeddings(nn.Module):
 
         # self.LayerNorm is not snake-cased to stick with TensorFlow model variable name and be able to load
         # any TensorFlow checkpoint file
-        self.LayerNorm = BertLayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
     def forward(self, input_ids, token_type_ids=None):
@@ -736,7 +736,7 @@ class NeZhaForTokenClassification(BertPreTrainedModel):
 
 
 class NeZhaBiLSTMForTokenClassification(BertPreTrainedModel):
-    
+
     """BERT-BiLSTM-CRF model for NER task.
     This module is composed of the NeZhaForTokenClassification model with a BiLSTM layer and a CRF layer on top of
     the pooled output.
@@ -802,12 +802,12 @@ class NeZhaBiLSTMForTokenClassification(BertPreTrainedModel):
             self.num_labels, self.num_labels
         ))
         self.apply(self._init_weights)
-    
+
     def _viterbi_decode(self, feats):
         '''
         Max-Product Algorithm or viterbi algorithm, argmax(p(z_0:t|x_0:t))
         '''
-        
+
         # T = self.max_seq_length
         T = feats.shape[1]
         batch_size = feats.shape[0]
@@ -816,7 +816,7 @@ class NeZhaBiLSTMForTokenClassification(BertPreTrainedModel):
 
         log_delta = torch.Tensor(batch_size, 1, self.num_labels).fill_(-10000.).cuda()
         log_delta[:, 0, self.start_label_id] = 0.
-        
+
         # psi is for the vaule of the last latent that make P(this_latent) maximum.
         psi = torch.zeros((batch_size, T, self.num_labels), dtype=torch.long)  # psi[0]=0000 useless
         for t in range(1, T):
@@ -838,26 +838,26 @@ class NeZhaBiLSTMForTokenClassification(BertPreTrainedModel):
             path[:, t] = psi[:, t+1].gather(-1,path[:, t+1].view(-1,1)).squeeze()
 
         return max_logLL_allz_allx, path
-    
+
     def log_sum_exp_batch(self, log_Tensor, axis=-1): # shape (batch_size,n,m)
         return torch.max(log_Tensor, axis)[0] + \
             torch.log(torch.exp(log_Tensor-torch.max(log_Tensor, axis)[0].view(log_Tensor.shape[0],-1,1)).sum(axis))
-    
+
     def _forward_alg(self, feats):
         '''
-        this also called alpha-recursion or forward recursion, to calculate log_prob of all barX 
+        this also called alpha-recursion or forward recursion, to calculate log_prob of all barX
         '''
-        
+
         # T = self.max_seq_length
-        T = feats.shape[1]  
+        T = feats.shape[1]
         batch_size = feats.shape[0]
-        
+
         # alpha_recursion,forward, alpha(zt)=p(zt,bar_x_1:t)
         log_alpha = torch.Tensor(batch_size, 1, self.num_labels).fill_(-10000.).cuda()  #[batch_size, 1, 16]
         # normal_alpha_0 : alpha[0]=Ot[0]*self.PIs
         # self.start_label has all of the score. it is log,0 is p=1
         log_alpha[:, 0, self.start_label_id] = 0
-        
+
         # feats: sentances -> word embedding -> lstm -> MLP -> feats
         # feats is the probability of emission, feat.shape=(1,tag_size)
         for t in range(1, T):
@@ -866,7 +866,7 @@ class NeZhaBiLSTMForTokenClassification(BertPreTrainedModel):
         # log_prob of all barX
         log_prob_all_barX = self.log_sum_exp_batch(log_alpha)
         return log_prob_all_barX
-    
+
     def _score_sentence(self, feats, label_ids):
         T = feats.shape[1]
         batch_size = feats.shape[0]
@@ -881,7 +881,7 @@ class NeZhaBiLSTMForTokenClassification(BertPreTrainedModel):
                 batch_transitions.gather(-1, (label_ids[:, t]*self.num_labels+label_ids[:, t-1]).view(-1,1)) \
                     + feats[:, t].gather(-1, label_ids[:, t].view(-1,1)).view(-1,1)
         return score
-    
+
     def neg_log_likelihood(self, input_ids, token_type_ids, attention_mask, labels):
         feats = self._get_lstm_features(input_ids, token_type_ids, attention_mask)  #[batch_size, max_len, 16]
         forward_score = self._forward_alg(feats)
@@ -899,7 +899,7 @@ class NeZhaBiLSTMForTokenClassification(BertPreTrainedModel):
         return logits  # [8, 75, 16]
 
     def forward(self, input_ids, token_type_ids=None, attention_mask=None, labels=None):
-        
+
         logits = self._get_lstm_features(input_ids, token_type_ids, attention_mask)  # [8, 180,768]
         score, logits = self._viterbi_decode(logits)
 

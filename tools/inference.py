@@ -8,6 +8,7 @@ import json
 import datetime
 import shutil
 import numpy as np
+from bidict import bidict
 import torch
 import torch.nn.functional as F
 from tools import official_tokenization as tokenization, utils
@@ -17,6 +18,7 @@ from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
 from models.modeling_nezha import (NeZhaForSequenceClassification, NeZhaForTokenClassification, NeZhaForTagClassification,
                                    NeZhaForDocumentClassification, NeZhaForDocumentTagClassification,
                                    NeZhaConfig, WEIGHTS_NAME, CONFIG_NAME)
+
 
 from datasets.textclf import encode_single_document
 
@@ -238,3 +240,44 @@ class NERInferenceService(object):
             rj["offset"] = [r[0], r[1]]
             result.append(rj)
         return result
+
+
+class AttitudeInferenceService(object):
+    def __init__(self, model_dir, **kwargs):
+        from models.tokenization_t5 import T5Tokenizer
+        from models.modeling_mt5 import MT5ForConditionalGeneration
+        model_tag = "/mnt/dl/zengqi/deploy_models/nytimes_sentiment_to_china_4c"
+        self.model = MT5ForConditionalGeneration.from_pretrained(model_tag)
+        self.tokenizer = T5Tokenizer.from_pretrained(model_tag)
+        self.model.cuda()
+        self.model.eval()
+
+        # four classes
+        self.cloze_words = bidict({
+            0: "中立",
+            1: "负面",
+            2: "恶意",
+            3: "憎恨",
+        })
+        self.cloze_length = 2
+        self.cloze_context = {
+                        "position": "head",
+                        "pin": "<extra_id_0>",
+                        "prefix": "这是一篇对华态度",
+                        "suffix": "的报道。"
+                    }
+
+    def input_preprocess(self, text):
+        processed_text = self.cloze_context["prefix"] + " " + \
+                    self.cloze_context["pin"] + " " + \
+                    self.cloze_context["suffix"] + text
+        inputs = self.tokenizer([processed_text], max_length=1024, return_tensors='pt')
+        return inputs.input_ids
+
+    def inference(self, text):
+        input_ids = self.input_preprocess(text)
+        attitude_ids = self.model.generate(input_ids.cuda(), num_beams=4, max_length=5, early_stopping=True)
+        raw_attitude_text = [self.tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in attitude_ids]
+        print("debug attitude:", raw_attitude_text)
+        attitude_text = "".join(raw_attitude_text)[-self.cloze_length:]
+        return self.cloze_words.inv[attitude_text]
