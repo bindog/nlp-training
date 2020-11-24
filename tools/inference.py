@@ -40,8 +40,9 @@ class SummarizationInferenceService(object):
 
     def inference(self, text):
         inputs = self.tokenizer([text], max_length=1024, return_tensors='pt')
-        summary_ids = self.model.generate(inputs.input_ids.cuda(), num_beams=4, max_length=50, early_stopping=True)
-        summary_text = [self.tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in summary_ids]
+        with torch.no_grad():
+            summary_ids = self.model.generate(inputs.input_ids.cuda(), num_beams=4, max_length=50, early_stopping=True)
+            summary_text = [self.tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in summary_ids]
         print("debug summary:", summary_text)
         return "".join(summary_text)
 
@@ -245,9 +246,8 @@ class AttitudeInferenceService(object):
     def __init__(self, model_dir, **kwargs):
         from models.tokenization_t5 import T5Tokenizer
         from models.modeling_mt5 import MT5ForConditionalGeneration
-        model_tag = "/mnt/dl/zengqi/deploy_models/nytimes_sentiment_to_china_4c"
-        self.model = MT5ForConditionalGeneration.from_pretrained(model_tag)
-        self.tokenizer = T5Tokenizer.from_pretrained(model_tag)
+        self.model = MT5ForConditionalGeneration.from_pretrained(model_dir)
+        self.tokenizer = T5Tokenizer.from_pretrained(model_dir)
         self.model.cuda()
         self.model.eval()
 
@@ -275,8 +275,9 @@ class AttitudeInferenceService(object):
 
     def inference(self, text):
         input_ids = self.input_preprocess(text)
-        attitude_ids = self.model.generate(input_ids.cuda(), num_beams=4, max_length=5, early_stopping=True)
-        raw_attitude_text = [self.tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in attitude_ids]
+        with torch.no_grad():
+            attitude_ids = self.model.generate(input_ids.cuda(), num_beams=4, max_length=5, early_stopping=True)
+            raw_attitude_text = [self.tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in attitude_ids]
         print("debug attitude:", raw_attitude_text)
         attitude_text = "".join(raw_attitude_text)[-self.cloze_length:]
         return self.cloze_words.inv[attitude_text]
