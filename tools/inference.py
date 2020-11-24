@@ -30,9 +30,8 @@ class SummarizationInferenceService(object):
     def __init__(self, model_dir, **kwargs):
         from models.tokenization_mbart import MBartTokenizer
         from models.modeling_mbart import MBartForConditionalGeneration
-        self.model = MBartForConditionalGeneration.from_pretrained("facebook/mbart-large-cc25")
-        self.tokenizer = MBartTokenizer.from_pretrained('facebook/mbart-large-cc25')
-        self.model.load_state_dict(torch.load(os.path.join(model_dir, WEIGHTS_NAME)))
+        self.model = MBartForConditionalGeneration.from_pretrained(model_dir)
+        self.tokenizer = MBartTokenizer.from_pretrained(model_dir)
         self.model.cuda()
         self.model.eval()
 
@@ -41,7 +40,7 @@ class SummarizationInferenceService(object):
 
     def inference(self, text):
         inputs = self.tokenizer([text], max_length=1024, return_tensors='pt')
-        summary_ids = self.model.generate(inputs['input_ids'].cuda(), num_beams=4, max_length=50, early_stopping=True)
+        summary_ids = self.model.generate(inputs.input_ids.cuda(), num_beams=4, max_length=50, early_stopping=True)
         summary_text = [self.tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in summary_ids]
         print("debug summary:", summary_text)
         return "".join(summary_text)
