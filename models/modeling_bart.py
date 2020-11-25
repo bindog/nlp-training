@@ -1184,6 +1184,16 @@ class BartForConditionalGeneration(PretrainedBartModel):
     def get_output_embeddings(self):
         return _make_linear_from_emb(self.model.shared)  # make it on the fly
 
+    def freeze_encoder(self):
+        for param in self.model.encoder.parameters():
+            param.requires_grad = False
+
+    def unfreeze_encoder_last_layers(self):
+        for name, param in self.model.encoder.named_parameters():
+            if "layer.11" in name:
+                param.requires_grad = True
+
+
 
 @add_start_docstrings(
     """

@@ -1164,6 +1164,15 @@ class T5ForConditionalGeneration(T5PreTrainedModel):
     def get_decoder(self):
         return self.decoder
 
+    def freeze_encoder(self):
+        for param in self.encoder.parameters():
+            param.requires_grad = False
+
+    def unfreeze_encoder_last_layers(self):
+        for name, param in self.encoder.named_parameters():
+            if "block.23.layer" in name or "encoder.final_layer_norm.weight" in name:
+                param.requires_grad = True
+
     @add_start_docstrings_to_model_forward(T5_INPUTS_DOCSTRING)
     @replace_return_docstrings(output_type=Seq2SeqLMOutput, config_class=_CONFIG_FOR_DOC)
     def forward(
