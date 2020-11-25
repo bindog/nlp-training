@@ -45,17 +45,12 @@ from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
 
-from models.modeling_nezha import (NeZhaForSequenceClassification, NeZhaForTokenClassification, NeZhaBiLSTMForTokenClassification,
-                            NeZhaForDocumentClassification, NeZhaForDocumentTagClassification,
-                            NeZhaForTagClassification, NeZhaConfig, WEIGHTS_NAME, CONFIG_NAME)
-
-from optimization import AdamW, get_linear_schedule_with_warmup
+from utils.model_utils import get_tokenizer_and_model, save_model
+from utils.optimization import AdamW, get_linear_schedule_with_warmup
 
 # check fp16 settings
 _use_native_amp = False
 _use_apex = False
-# which version am i now
-VERSION = 'Translation-V1.0' # Translation v1.0
 
 # Check if Pytorch version >= 1.6 to switch between Native AMP and Apex
 if version.parse(torch.__version__) < version.parse("1.6"):
@@ -78,92 +73,6 @@ def get_split_path(data_dir, split):
             if os.path.exists(json_path):
                 return json_path
     return os.path.join(data_dir, split + ".json")
-
-
-def get_tokenizer(args):
-    if args.model_name == "nezha":
-        if args.bert_model:
-            tokenizer = tokenization.BertTokenizer(vocab_file=os.path.join(args.bert_model, 'vocab.txt'),
-                                                   do_lower_case=True)
-        elif args.trained_model_dir:
-            tokenizer = tokenization.BertTokenizer(vocab_file=os.path.join(args.trained_model_dir, 'vocab.txt'),
-                                                   do_lower_case=True)
-        else:
-            logger.error("BERT vocab file not set, please check your ber_model_dir or trained_model_dir")
-        logger.info('vocab size is %d' % (len(tokenizer.vocab)))
-    elif args.model_name == "longformer":
-        from models.tokenization_longformer import LongformerTokenizer
-        tokenizer = LongformerTokenizer.from_pretrained("allenai/longformer-base-4096")
-    elif args.model_name == "bart":
-        from models.tokenization_mbart import MBartTokenizer
-        tokenizer = MBartTokenizer.from_pretrained('facebook/mbart-large-cc25')
-    else:
-        logger.error("can not find the proper tokenizer type...")
-    return tokenizer
-
-
-def get_model(args, bert_config, label_map, num_labels):
-    if args.task_name == "ner":
-        if args.ner_addBilstm:
-            logger.info('Use BiLSTM in NER Model.')
-            return NeZhaBiLSTMForTokenClassification(bert_config, label_map, num_labels=num_labels)
-        else:
-            return NeZhaForTokenClassification(bert_config, num_labels=num_labels)
-    elif args.task_name == "textclf":
-        if args.model_name == "longformer":
-            from models.configuration_longformer import LongformerConfig
-            from models.modeling_longformer import LongformerForSequenceClassification
-            config = LongformerConfig.from_pretrained("allenai/longformer-base-4096")
-            config.num_labels = num_labels
-            model = LongformerForSequenceClassification(config)
-            model.from_pretrained("allenai/longformer-base-4096")
-            model.freeze_encoder()
-            model.unfreeze_encoder_last_layers()
-            return model
-        elif args.model_name == "nezha":
-            if args.encode_document:
-                model = NeZhaForDocumentClassification(bert_config, args.doc_inner_batch_size, num_labels=num_labels)
-                if args.freeze_encoder:
-                    model.freeze_encoder()
-                    model.unfreeze_encoder_last_layers()
-                return model
-            else:
-                return NeZhaForSequenceClassification(bert_config, num_labels=num_labels)
-        else:
-            logger.error("can not find the proper model type...")
-            return None
-    elif args.task_name == "tag":
-        if args.encode_document:
-            model = NeZhaForDocumentTagClassification(bert_config, args.doc_inner_batch_size, num_labels=num_labels)
-            if args.freeze_encoder:
-                model.freeze_encoder()
-                model.unfreeze_encoder_last_layers()
-            return model
-        else:
-            return NeZhaForTagClassification(bert_config, num_labels=num_labels)
-    elif args.task_name == "summary":
-        from models.modeling_mbart import MBartForConditionalGeneration
-        gradient_checkpointing_flag = True if args.gradient_checkpointing else False
-        if gradient_checkpointing_flag:
-            logger.info("gradient checkpointing enabled")
-        model = MBartForConditionalGeneration.from_pretrained("facebook/mbart-large-cc25", gradient_checkpointing=gradient_checkpointing_flag)
-        if args.freeze_encoder:
-            model.freeze_encoder()
-            model.unfreeze_encoder_last_layers()
-        return model
-    elif args.task_name == "translation":
-        from models.modeling_mbart import MBartForConditionalGeneration
-        gradient_checkpointing_flag = True if args.gradient_checkpointing else False
-        if gradient_checkpointing_flag:
-            logger.info("gradient checkpointing enabled")
-        model = MBartForConditionalGeneration.from_pretrained("facebook/mbart-large-cc25", gradient_checkpointing=gradient_checkpointing_flag)
-        if args.freeze_encoder:
-            model.freeze_encoder()
-            model.unfreeze_encoder_last_layers()
-        return model
-    else:
-        logger.error("task type not supported!")
-        return None
 
 
 def get_optimizer_and_scheduler(args, model, num_training_steps):
@@ -251,7 +160,7 @@ def train_loop(args, model, train_dataloader, optimizer, lr_scheduler, num_gpus,
             if isinstance(outputs, tuple):
                 loss = outputs[0]
             else:
-                loss = outputs
+                loss = outputs.loss
 
         if num_gpus > 1:
             loss = loss.mean()  # mean() to average on multi-gpu parallel training
@@ -593,11 +502,11 @@ def main():
                         action='store_true',
                         help="Is bilstm model used.")
     args = parser.parse_args()
-    args.output_dir = args.output_dir + '/' + VERSION + '/' + args.corpus
+    args.output_dir = args.output_dir + '/' + args.corpus
 
     if not args.debug:
         wandb.init(project="nlp-task", dir=args.output_dir)
-        wandb.run.name = VERSION + '-' + args.corpus + '-' + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        wandb.run.name = args.corpus + '-' + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         wandb.config.update(args)
         wandb.run.save()
 
@@ -692,7 +601,7 @@ def main():
             logger.info('init nezha model from user fine-tune model...')
             config = NeZhaConfig().from_json_file(os.path.join(args.trained_model_dir, 'bert_config.json'))
             model = get_model(args, config, label_map_reverse, num_labels=num_labels)
-            model.load_state_dict(torch.load(os.path.join(args.trained_model_dir, WEIGHTS_NAME)))
+            model.load_state_dict(torch.load(os.path.join(args.trained_model_dir, 'pytorch_model.bin')))
         elif args.bert_model:
             logger.info('init nezha model from original pretrained model...')
             config = NeZhaConfig().from_json_file(os.path.join(args.bert_model, 'bert_config.json'))
@@ -703,6 +612,9 @@ def main():
         logger.info('init longformer model from original pretrained model...')
         model = get_model(args, None, num_labels=num_labels)
     elif args.model_name == "bart":
+        logger.info('init bart model from original pretrained model...')
+        model = get_model(args, None, None, num_labels=num_labels)
+    elif args.model_name == "t5" or args.model_name == "mt5":
         logger.info('init bart model from original pretrained model...')
         model = get_model(args, None, None, num_labels=num_labels)
 
@@ -743,12 +655,7 @@ def main():
             eval_loop(args, model, eval_dataloader, label_map)
 
             # Save a trained model and the associated configuration
-            model_to_save = model.module if hasattr(model, 'module') else model  # Only save the model it-self
-            output_model_file = os.path.join(args.output_dir, WEIGHTS_NAME)
-            torch.save(model_to_save.state_dict(), output_model_file)
-            output_config_file = os.path.join(args.output_dir, CONFIG_NAME)
-            with open(output_config_file, 'w') as f:
-                f.write(model_to_save.config.to_json_string())
+            save_model(args, tokenizer, model)
 
             epoch += 1
 
