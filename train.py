@@ -19,6 +19,7 @@
 from __future__ import absolute_import, division, print_function
 
 import os
+import pathlib
 import argparse
 import random
 import sys
@@ -35,16 +36,14 @@ logging.basicConfig(level=logging.INFO, format="[%(asctime)s %(filename)s %(line
 logger = logging.getLogger(__name__)
 
 from packaging import version
-from tools import official_tokenization as tokenization, utils
 import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
 import torch.nn.functional as F
-from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
-                              TensorDataset)
-from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
 
+from utils.config_utils import parse_cfg
+from utils.data_utils import get_label_map, get_dataloader
 from utils.model_utils import get_tokenizer_and_model, save_model
 from utils.optimization import AdamW, get_linear_schedule_with_warmup
 
@@ -65,95 +64,19 @@ else:
     from torch.cuda.amp import autocast
 
 
-def get_split_path(data_dir, split):
-    if split == "val" or split == "dev" or split == "valid":
-        c_list = ["val", "dev", "valid"]
-        for c in c_list:
-            json_path = os.path.join(data_dir, c + ".json")
-            if os.path.exists(json_path):
-                return json_path
-    return os.path.join(data_dir, split + ".json")
-
-
-def get_optimizer_and_scheduler(args, model, num_training_steps):
-    """
-    Setup the optimizer and the learning rate scheduler.
-    We provide a reasonable default that works well. If you want to use something else, you can pass a tuple in the
-    Trainer's init through :obj:`optimizers`, or subclass and override this method in a subclass.
-    """
-    no_decay = ["bias", "LayerNorm.weight"]
-    optimizer_grouped_parameters = [
-        {
-            "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
-            "weight_decay": args.weight_decay,
-        },
-        {
-            "params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)],
-            "weight_decay": 0.0,
-        },
-    ]
-    optimizer = AdamW(
-        optimizer_grouped_parameters,
-        lr=args.learning_rate,
-        betas=(args.adam_beta1, args.adam_beta2),
-        eps=args.adam_epsilon,
-    )
-    lr_scheduler = get_linear_schedule_with_warmup(
-        optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=num_training_steps
-    )
-    return optimizer, lr_scheduler
-
-
-def get_dataloader(args, tokenizer, num_labels, split):
-    # speed up for debug
-    if args.debug:
-        split = "dev"
-    json_file = get_split_path(args.data_dir, split)
-    if args.task_name == "ner":
-        from datasets.ner import NERDataset
-        label_map_path = os.path.join(args.data_dir, "label_map")
-        dataset = NERDataset(json_file, label_map_path, tokenizer, num_labels=num_labels)
-    elif args.task_name == "textclf":
-        longformer = True if args.model_name == "longformer" else False
-        from datasets.textclf import TextclfDataset
-        dataset = TextclfDataset(json_file, tokenizer, num_labels, args.doc_inner_batch_size, args.max_seq_length, args.encode_document, longformer)
-    elif args.task_name == "tag":
-        from datasets.textclf import TextclfDataset
-        dataset = TextclfDataset(json_file, tokenizer, num_labels, args.doc_inner_batch_size, args.max_seq_length, args.encode_document, longformer, tag=True)
-    elif args.task_name == "summary":
-        from datasets.summarization import SummarizationDataset
-        dataset = SummarizationDataset(json_file, tokenizer, max_target_length=args.max_summarization_length)
-    elif args.task_name == "translation":
-        from datasets.translation import TranslationDataset
-        dataset = TranslationDataset(json_file, tokenizer)
-    if args.distributed:
-        sampler = DistributedSampler(dataset)
-    else:
-        sampler = None
-    shuffle = True if split == "train" and args.distributed == False else False
-    batch_size = args.train_batch_size if split == "train" else args.eval_batch_size
-    dataloader = DataLoader(
-                        dataset,
-                        batch_size=batch_size,
-                        shuffle=shuffle,
-                        num_workers=4,
-                        sampler=sampler
-                    )
-    return len(dataset), dataloader
-
-
-def train_loop(args, model, train_dataloader, optimizer, lr_scheduler, num_gpus, epoch, scaler=None):
+def train_loop(cfg, model, train_dataloader, optimizer, lr_scheduler, num_gpus, epoch, scaler=None, debug=False):
     model.train()
     p = tqdm(train_dataloader, desc="Iteration")
     for step, batch in enumerate(p):
         inputs = {k: v.cuda() for k, v in batch.items()}
 
-        if args.fp16 and _use_native_amp:
+        if cfg["train"]["fp16"] and _use_native_amp:
             with autocast():
                 outputs = model(**inputs)
                 loss = outputs[0]
-        elif args.ner_addBilstm:
-            loss = model.neg_log_likelihood(**inputs)
+        # FIXME ner bilstm condition not correct
+        # elif cfg["train"]["ner_addBilstm"]:
+        #     loss = model.neg_log_likelihood(**inputs)
         else:
             outputs = model(**inputs)
             # We don't use .loss here since the model may return tuples instead of ModelOutput.
@@ -165,43 +88,44 @@ def train_loop(args, model, train_dataloader, optimizer, lr_scheduler, num_gpus,
         if num_gpus > 1:
             loss = loss.mean()  # mean() to average on multi-gpu parallel training
 
-        if args.gradient_accumulation_steps > 1:
-            loss = loss / args.gradient_accumulation_steps
+        if cfg["optimizer"]["gradient_accumulation_steps"] > 1:
+            loss = loss / cfg["optimizer"]["gradient_accumulation_steps"]
 
-        if args.fp16 and _use_native_amp:
+        if cfg["train"]["fp16"] and _use_native_amp:
             scaler.scale(loss).backward()
-        elif args.fp16 and _use_apex:
+        elif cfg["train"]["fp16"] and _use_apex:
             with amp.scale_loss(loss, optimizer) as scaled_loss:
                 scaled_loss.backward()
         else:
             loss.backward()
 
-        if (step + 1) % args.gradient_accumulation_steps == 0:
+        if (step + 1) % cfg["optimizer"]["gradient_accumulation_steps"] == 0:
             # unscale and clip grad norm
-            if args.fp16 and _use_native_amp:
+            if cfg["train"]["fp16"] and _use_native_amp:
                 scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
-            elif args.fp16 and _use_apex:
-                torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_grad_norm)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), cfg["optimizer"]["max_grad_norm"])
+            elif cfg["train"]["fp16"] and _use_apex:
+                torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), cfg["optimizer"]["max_grad_norm"])
             else:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), cfg["optimizer"]["max_grad_norm"])
 
             # model params step
-            if args.fp16 and _use_native_amp:
+            if cfg["train"]["fp16"] and _use_native_amp:
                 scaler.step(optimizer)
                 scaler.update()
             else:
                 optimizer.step()
 
             lr_scheduler.step()
-            model.zero_grad()
+            # model.zero_grad()
+            optimizer.zero_grad()
 
-            if step % 10 == 0 and step > 0 and not args.debug:
+            if step % 10 == 0 and step > 0 and not debug:
                 p.set_postfix(loss=round(loss.item(), 4))
                 wandb.log({"epoch": epoch, "step": step, "train_loss": loss.item(),
-                           "learning_rate": lr_scheduler.get_last_lr()[0]})
-        if args.debug:
-            break
+                           "lr": lr_scheduler.get_last_lr()[0]})
+        # if debug:
+        #     break
 
 
 def eval_loop(args, model, eval_dataloader, label_map):
@@ -347,176 +271,47 @@ def eval_loop(args, model, eval_dataloader, label_map):
 def main():
     parser = argparse.ArgumentParser()
     ## Required parameters
-    parser.add_argument("--data_dir",
+    parser.add_argument("--config",
                         default=None,
                         type=str,
                         required=True,
-                        help="The input data dir. Should contain the .tsv files (or other data files) for the task.")
-    parser.add_argument("--model_name",
-                        default=None,
-                        type=str,
-                        required=True,
-                        help="The name of the model to do task")
-    parser.add_argument("--encode_document",
-                        action='store_true',
-                        help="Whether treat the text as document or not")
-    parser.add_argument("--bert_model", default=None, type=str, required=False,
-                        help="Bert pre-trained model selected in the list: bert-base-uncased, "
-                             "bert-large-uncased, bert-base-cased, bert-large-cased, bert-base-multilingual-uncased, "
-                             "bert-base-multilingual-cased, bert-base-chinese.")
-
-    # trained_model_file
-    parser.add_argument("--trained_model_dir", default=None, type=str,
-                        help="trained model for eval or predict")
-    parser.add_argument("--task_name",
-                        default=None,
-                        type=str,
-                        required=True,
-                        help="The name of the task to train.")
-    parser.add_argument("--output_dir",
-                        default=None,
-                        type=str,
-                        required=True,
-                        help="The output directory where the model predictions and checkpoints will be written.")
-    parser.add_argument("--corpus",
-                        default='NoneSet',
-                        type=str,
-                        required=True,
-                        help="Corpus used .")
-
-    ## Other parameters
-    parser.add_argument("--cache_dir",
-                        default="",
-                        type=str,
-                        help="Where do you want to store the pre-trained models downloaded from s3")
-    parser.add_argument("--max_seq_length",
-                        default=128,
-                        type=int,
-                        help="The maximum total input sequence length after WordPiece tokenization. \n"
-                             "Sequences longer than this will be truncated, and sequences shorter \n"
-                             "than this will be padded.")
-    parser.add_argument("--do_train",
-                        action='store_true',
-                        help="Whether to run training.")
-    parser.add_argument("--my_tokenization",
-                        action='store_true',
-                        help="Whether to run training.")
-    parser.add_argument("--do_eval",
-                        action='store_true',
-                        help="Whether to run eval on the dev set.")
-    parser.add_argument("--do_test",
-                        action='store_true',
-                        help="Whether to run eval on the test set.")
-    parser.add_argument("--do_lower_case",
-                        default=False,
-                        help="Set this flag if you are using an uncased model.")
-    parser.add_argument("--train_batch_size",
-                        default=32,
-                        type=int,
-                        help="Total batch size for training.")
-    parser.add_argument("--eval_batch_size",
-                        default=8,
-                        type=int,
-                        help="Total batch size for eval.")
-    parser.add_argument("--doc_inner_batch_size",
-                        default=5,
-                        type=int,
-                        help="batch_size in each doc, enabled if encode_document is True")
-    parser.add_argument("--learning_rate",
-                        default=5e-5,
-                        type=float,
-                        help="The initial learning rate for Adam.")
-    parser.add_argument("--adam_beta1",
-                        default=0.9,
-                        type=float,
-                        help="Beta1 for Adam optimizer")
-    parser.add_argument("--adam_beta2",
-                        default=0.999,
-                        type=float,
-                        help="Beta2 for Adam optimizer")
-    parser.add_argument("--adam_epsilon",
-                        default=1e-8,
-                        type=float,
-                        help="Epsilon for Adam optimizer")
-    parser.add_argument("--max_grad_norm",
-                        default=1.0,
-                        type=float,
-                        help="Max gradient norm")
-    parser.add_argument("--weight_decay",
-                        default=0.0,
-                        type=float,
-                        help="weight decay")
-    parser.add_argument("--warmup_steps",
-                        default=200,
-                        type=int,
-                        help="Number of steps used for a linear warmup from 0 to `learning_rate`")
-    parser.add_argument("--warmup_proportion",
-                        default=0.1,
-                        type=float,
-                        help="Proportion of training to perform linear learning rate warmup for. "
-                             "E.g., 0.1 = 10%% of training.")
-    parser.add_argument("--num_train_epochs",
-                        default=3.0,
-                        type=float,
-                        help="Total number of training epochs to perform.")
-    parser.add_argument("--freeze_encoder",
-                        action='store_true',
-                        help="Whether not to train bert encoder")
-    parser.add_argument("--no_cuda",
-                        action='store_true',
-                        help="Whether not to use CUDA when available")
+                        help="the training config file")
     parser.add_argument("--local_rank",
                         type=int,
                         default=-1,
                         help="local_rank for distributed training on gpus")
-    parser.add_argument('--seed',
-                        type=int,
-                        default=42,
-                        help="random seed for initialization")
-    parser.add_argument('--gradient_accumulation_steps',
-                        type=int,
-                        default=1,
-                        help="Number of updates steps to accumulate before performing a backward/update pass.")
-    parser.add_argument('--gradient_checkpointing',
-                        action='store_true',
-                        help="Whether to use gradient checkpointing")
-    parser.add_argument('--fp16',
-                        action='store_true',
-                        help="Whether to use 16-bit float precision instead of 32-bit")
-    parser.add_argument('--fp16_opt_level',
-                        default="O1",
-                        type=str,
-                        help="apex fp16 optimization level")
-    parser.add_argument('--loss_scale',
-                        type=float, default=0,
-                        help="Loss scaling to improve fp16 numeric stability. Only used when fp16 set to True.\n"
-                             "0 (default value): dynamic loss scaling.\n"
-                             "Positive power of 2: static loss scaling value.\n")
-    parser.add_argument("--max_summarization_length",
-                       type=int, default=56,
-                       help="max summarization text length")
-    parser.add_argument('--debug',
-                        action='store_true',
+    parser.add_argument("--multi_task",
+                        action="store_true",
+                        help="training with multi task schema")
+    parser.add_argument("--debug",
+                        action="store_true",
                         help="in debug mode, will not enable wandb log")
-    parser.add_argument('--ner_addBilstm',
-                        action='store_true',
-                        help="Is bilstm model used.")
     args = parser.parse_args()
-    args.output_dir = args.output_dir + '/' + args.corpus
+    cfg = parse_cfg(pathlib.Path(args.config))
+
+    cfg["train"]["output_dir"] = cfg["train"]["output_dir"] + "/" + \
+                                 cfg["train"]["task_name"] + "_" + \
+                                 cfg["train"]["model_name"] + "_" + \
+                                 cfg["data"]["corpus"]
+
+    output_dir_pl = pathlib.Path(cfg["train"]["output_dir"])
+    if output_dir_pl.exists():
+        logger.warn("output directory ({}) already exists!".format(output_dir_pl))
+        time.sleep(2)
+    else:
+        output_dir_pl.mkdir(parents=True, exist_ok=True)
 
     if not args.debug:
-        wandb.init(project="nlp-task", dir=args.output_dir)
+        wandb.init(project="nlp-task", dir=cfg["train"]["output_dir"])
         wandb.run.name = args.corpus + '-' + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         wandb.config.update(args)
         wandb.run.save()
 
-    if args.no_cuda:
-        logger.info("can not train without GPU")
-        exit()
-
     if args.local_rank == -1:
         num_gpus = torch.cuda.device_count()
         args.distributed = False
+        # FIXME multi gpus
+        torch.cuda.set_device(int(cfg["system"]["cuda_devices"]))
     else:
         torch.cuda.set_device(args.local_rank)
         num_gpus = 1
@@ -525,148 +320,81 @@ def main():
         torch.distributed.init_process_group(backend='nccl', init_method='env://')
         args.world_size = torch.distributed.get_world_size()
     logger.info("num_gpus: {}, distributed training: {}, 16-bits training: {}".format(
-        num_gpus, bool(args.local_rank != -1), args.fp16))
+        num_gpus, bool(args.local_rank != -1), cfg["train"]["fp16"]))
     cudnn.benchmark = True
 
-    if args.gradient_accumulation_steps < 1:
-        raise ValueError("Invalid gradient_accumulation_steps parameter: {}, should be >= 1".format(
-            args.gradient_accumulation_steps))
+    if cfg["optimizer"]["gradient_accumulation_steps"] < 1:
+        raise ValueError("Invalid gradient_accumulation_steps parameter: {}, should be >= 1".format(cfg["optimizer"]["gradient_accumulation_steps"]))
 
-    args.train_batch_size = args.train_batch_size // args.gradient_accumulation_steps
+    # true batch_size in training
+    cfg["train"]["batch_size"] = cfg["train"]["batch_size"] // cfg["optimizer"]["gradient_accumulation_steps"]
 
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    if num_gpus > 0:
-        torch.cuda.manual_seed_all(args.seed)
-
-    if args.distributed == False or args.local_rank == 0:
-        if os.path.exists(args.output_dir) and os.listdir(args.output_dir) and args.do_train:
-            logger.warn("Output directory ({}) already exists and is not empty.".format(args.output_dir))
-            time.sleep(2)
-
-    if not os.path.exists(args.output_dir):
-        os.makedirs(args.output_dir)
-
-    task_name = args.task_name.lower()
-    model_name = args.model_name.lower()
-    tokenizer = get_tokenizer(args)
-    args.tokenizer = tokenizer
-
-    if model_name == "nezha":
-        # copy vocab.txt from pretrained model dir to output dir
-        if args.bert_model:
-            shutil.copyfile(os.path.join(args.bert_model, "vocab.txt"), os.path.join(args.output_dir, "vocab.txt"))
-        elif args.trained_model_dir and args.trained_model_dir != args.output_dir:
-            shutil.copyfile(os.path.join(args.trained_model_dir, "vocab.txt"), os.path.join(args.output_dir, "vocab.txt"))
-    # TODO: if other model name needs the vocab.txt
-    # elif model_name == "OTHER"
-    # pass
-
-    if args.do_train:
-        # label_map {id: label, ...}
-        if args.task_name in ["ner", "textclf", "tag"]:
-            if not os.path.exists(os.path.join(args.data_dir, "label_map")):
-                logger.info("your task type need a label_map file under data_dir, please check!")
-                exit()
-            with open(os.path.join(args.data_dir, "label_map")) as f:
-                label_map = json.loads(f.read().strip())
-                label_map = {int(k):v for k, v in label_map.items()}
-            # copy label_map to output dir
-            shutil.copyfile(
-                os.path.join(args.data_dir, "label_map"),
-                os.path.join(args.output_dir, "label_map")
-            )
-        else:
-            label_map = {}
-        num_labels = len(label_map)
-
-        # label_map_reverse {label: id, ...}
-        label_map_reverse = {v: k for k, v in label_map.items()}
-
-        # TODO add label_map_reverse into nerdataset
-        num_examples, train_dataloader = get_dataloader(args, tokenizer, num_labels, "train")
-        # TODO add control flag
-        _, eval_dataloader = get_dataloader(args, tokenizer, num_labels, "dev")
-
-        # total training steps (including multi epochs)
-        num_training_steps = int(len(train_dataloader) // args.gradient_accumulation_steps * args.num_train_epochs)
-    else:
-        # TODO not train...
-        # do some other things
-        pass
-
-    if args.model_name == "nezha":
-        if args.trained_model_dir:
-            logger.info('init nezha model from user fine-tune model...')
-            config = NeZhaConfig().from_json_file(os.path.join(args.trained_model_dir, 'bert_config.json'))
-            model = get_model(args, config, label_map_reverse, num_labels=num_labels)
-            model.load_state_dict(torch.load(os.path.join(args.trained_model_dir, 'pytorch_model.bin')))
-        elif args.bert_model:
-            logger.info('init nezha model from original pretrained model...')
-            config = NeZhaConfig().from_json_file(os.path.join(args.bert_model, 'bert_config.json'))
-            model = get_model(args, config, label_map_reverse, num_labels=num_labels)
-            utils.torch_show_all_params(model)
-            utils.torch_init_model(model, os.path.join(args.bert_model, 'pytorch_model.bin'))
-    elif args.model_name == "longformer":
-        logger.info('init longformer model from original pretrained model...')
-        model = get_model(args, None, num_labels=num_labels)
-    elif args.model_name == "bart":
-        logger.info('init bart model from original pretrained model...')
-        model = get_model(args, None, None, num_labels=num_labels)
-    elif args.model_name == "t5" or args.model_name == "mt5":
-        logger.info('init bart model from original pretrained model...')
-        model = get_model(args, None, None, num_labels=num_labels)
+    # the type of label_map is bidict
+    # label_map[x] = xx, label_map.inv[xx] = x
+    label_map, num_labels = get_label_map(cfg)
+    tokenizer, model = get_tokenizer_and_model(cfg, label_map, num_labels)
 
     # check model details on wandb
     if not args.debug:
         wandb.watch(model)
 
-    optimizer, lr_scheduler = get_optimizer_and_scheduler(args, model, num_training_steps)
+    # TODO add label_map_reverse into nerdataset
+    num_examples, train_dataloader = get_dataloader(cfg, tokenizer, num_labels, "train", debug=args.debug)
+    # TODO add control flag
+    _, eval_dataloader = get_dataloader(cfg, tokenizer, num_labels, "dev", debug=args.debug)
+
+    # total training steps (including multi epochs)
+    num_training_steps = int(len(train_dataloader) // cfg["optimizer"]["gradient_accumulation_steps"] * cfg["train"]["train_epochs"])
+
+    optimizer = AdamW(
+        params=model.parameters(),
+        lr=cfg["optimizer"]["lr"]
+    )
+    lr_scheduler = get_linear_schedule_with_warmup(
+        optimizer, num_warmup_steps=cfg["optimizer"]["num_warmup_steps"], num_training_steps=num_training_steps
+    )
+
     scaler = None
     model = model.cuda()
-    if args.fp16 and _use_apex:
+    if cfg["train"]["fp16"] and _use_apex:
         logger.error("using apex amp for fp16...")
-        model, optimizer = amp.initialize(model, optimizer, opt_level=args.fp16_opt_level)
-    elif args.fp16 and _use_native_amp:
+        model, optimizer = amp.initialize(model, optimizer, opt_level="O1")
+    elif cfg["train"]["fp16"] and _use_native_amp:
         logger.error("using pytorch native amp for fp16...")
         scaler = torch.cuda.amp.GradScaler()
-    elif args.fp16 and (_use_apex is False and _use_native_amp is False):
+    elif cfg["train"]["fp16"] and (_use_apex is False and _use_native_amp is False):
         logger.error("your environment DO NOT support fp16 training...")
         exit()
 
-    if args.distributed:
+    if cfg["system"]["distributed"]:
         # TODO needs fix here
         model.cuda(args.local_rank)
         from torch.nn.parallel import DistributedDataParallel as DDP
         model = DDP(model, device_ids=[args.local_rank])
     elif num_gpus > 1:
+        # TODO add devices id here!!!
         model = torch.nn.DataParallel(model)
 
-    if args.do_train:
-        logger.info("== start training on train set ==")
-        epoch = 0
-        for _ in trange(int(args.num_train_epochs), desc="Epoch"):
-            # train loop in one epoch
-            train_loop(args, model, train_dataloader, optimizer, lr_scheduler, num_gpus, epoch, scaler)
+    # Train
+    logger.info("start training on train set")
+    epoch = 0
+    for _ in trange(int(cfg["train"]["train_epochs"]), desc="Epoch"):
+        # train loop in one epoch
+        train_loop(cfg, model, train_dataloader, optimizer, lr_scheduler, num_gpus, epoch, scaler, args.debug)
 
-            # begin to evaluate
-            logger.info("== running evaluation on dev set ==")
-            eval_loop(args, model, eval_dataloader, label_map)
-
-            # Save a trained model and the associated configuration
-            save_model(args, tokenizer, model)
-
-            epoch += 1
-
-    if args.do_eval and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
-        logger.info("== running evaluation on dev set ==")
-        _, eval_dataloader = get_dataloader(args, tokenizer, num_labels, "dev")
+        # begin to evaluate
+        logger.info("running evaluation on dev set")
         eval_loop(args, model, eval_dataloader, label_map)
 
-    if args.do_test:
-        logger.info("== running evaluation in test set ==")
-        _, eval_dataloader = get_dataloader(args, tokenizer, num_labels, "test")
+        # Save a trained model and the associated configuration
+        save_model(cfg, tokenizer, model)
+
+        epoch += 1
+
+    # Eval
+    if args.local_rank == -1 or torch.distributed.get_rank() == 0:
+        logger.info("running evaluation on dev set")
+        _, eval_dataloader = get_dataloader(args, tokenizer, num_labels, "dev")
         eval_loop(args, model, eval_dataloader, label_map)
 
 

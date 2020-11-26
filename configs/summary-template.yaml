@@ -1,6 +1,7 @@
 train:
     task_name: "summary"
     model_name: "mbart"
+    pretrained_tag: "facebook/mbart-large-cc25"
     pretrained_model: "/path/to/the/pretrained/model"
     batch_size: 8
     train_epochs: 5.0
@@ -12,15 +13,19 @@ eval:
     batch_size: 4
     metric: "bleu"
 data:
-    corpus: "corpus name"
+    corpus: "corpus_name"
     data_dir: "/path/to/the/data/dir"
+    num_labels: -1
     max_src_length: 1024
     max_tgt_length: 56
     crosslingual: false
 optimizer:
     type: "AdamW"
-    lr: 5e-5  # for mt5 model, the recommend lr is 5e-4
+    lr: 0.00005  # mbart 5e-5; for mt5 model, the recommend lr is 5e-4(0.0005) 
     weight_decay: 0.0
-    warm_steps: 200
+    num_warmup_steps: 200
+    gradient_accumulation_steps: 1
+    max_grad_norm: 1.0
 system:
     cuda_devices: "0"  # if num of devices > 1, using data parallel
+    distributed: false

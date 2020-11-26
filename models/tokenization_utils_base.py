@@ -2015,7 +2015,9 @@ class PreTrainedTokenizerBase(SpecialTokensMixin):
                 out_str = json.dumps(added_vocab, ensure_ascii=False)
                 f.write(out_str)
 
-        vocab_files = self.save_vocabulary(save_directory, filename_prefix=filename_prefix)
+        # FIXME temp fix for bart save_pretrained
+        # vocab_files = self.save_vocabulary(save_directory, filename_prefix=filename_prefix)
+        vocab_files = self.save_vocabulary(save_directory)
 
         return file_names + vocab_files + (added_tokens_file,)
 

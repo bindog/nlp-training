@@ -1,4 +1,8 @@
 import os
+import shutil
+import pathlib
+import logging
+from tools import official_tokenization as tokenization
 from models.modeling_nezha import (
                             NeZhaConfig, NeZhaForSequenceClassification, NeZhaForTokenClassification,
                             NeZhaBiLSTMForTokenClassification, NeZhaForDocumentClassification,
@@ -7,27 +11,32 @@ from models.modeling_nezha import (
 
 
 pretrained_local_mapping = {
-    "facebook/mbart-large-cc25": "",
+    "huawei/nezha-en-base": "/mnt/dl/public/pretrained_models/NEZHA-Models/nezha-en-base",
+    "huawei/nezha-zh-base": "/mnt/dl/public/pretrained_models/NEZHA-Models/nezha-zh-base",
+    "huawei/nezha-zh-large": "/mnt/dl/public/pretrained_models/NEZHA-Models/nezha-zh-large",
+    "facebook/mbart-large-cc25": "/mnt/dl/public/pretrained_models/mbart-large-cc25",
     "google/mt5-base": "/mnt/dl/public/pretrained_models/mt5-base",
     "google/mt5-large": "/mnt/dl/public/pretrained_models/mt5-large"
 }
 
 
-def get_tokenizer(args):
-    if args.model_name == "nezha":
-        if args.bert_model:
-            tokenizer = tokenization.BertTokenizer(vocab_file=os.path.join(args.bert_model, 'vocab.txt'), do_lower_case=True)
-        elif args.trained_model_dir:
-            tokenizer = tokenization.BertTokenizer(vocab_file=os.path.join(args.trained_model_dir, 'vocab.txt'), do_lower_case=True)
+logging.basicConfig(level=logging.INFO, format="[%(asctime)s %(filename)s %(lineno)d] %(message)s")
+logger = logging.getLogger(__name__)
+
+
+def get_tokenizer(cfg):
+    if cfg["train"]["model_name"] == "nezha":
+        if cfg["train"]["pretrained_model"]:
+            tokenizer = tokenization.BertTokenizer(vocab_file=os.path.join(cfg["train"]["pretrained_model"], "vocab.txt"), do_lower_case=True)
         else:
             logger.error("BERT vocab file not set, please check your ber_model_dir or trained_model_dir")
         logger.info('vocab size is %d' % (len(tokenizer.vocab)))
         return tokenizer
-    elif args.model_name == "bart" or args.model_name == "mbart":
+    elif cfg["train"]["model_name"] == "bart" or cfg["train"]["model_name"] == "mbart":
         from models.tokenization_mbart import MBartTokenizer
         tokenizer = MBartTokenizer.from_pretrained('facebook/mbart-large-cc25')
         return tokenizer
-    elif args.model_name == "t5" or args.model_name == "mt5":
+    elif cfg["train"]["model_name"] == "t5" or cfg["train"]["model_name"] == "mt5":
         from models.tokenization_t5 import T5Tokenizer
         pretrained_tag = "/mnt/dl/public/pretrained_models/mt5-large"
         tokenizer = T5Tokenizer.from_pretrained(pretrained_tag)
@@ -37,85 +46,103 @@ def get_tokenizer(args):
         return None
 
 
-def get_tokenizer_and_model(args, bert_config, label_map, num_labels):
-    if args.task_name == "ner":
-        if args.ner_addBilstm:
-            logger.info('Use BiLSTM in NER Model.')
-            return NeZhaBiLSTMForTokenClassification(bert_config, label_map, num_labels=num_labels)
+def get_pretrained_model_path(cfg):
+    ptd = None
+    # pretrained_model path comes first, cause it maybe user specified trained model
+    if cfg["train"]["pretrained_model"]:
+        if pathlib.Path(cfg["train"]["pretrained_model"]).exists():
+            ptd = cfg["train"]["pretrained_model"]
+            return ptd
+
+    # then we check the pretrained_tag same to HuggingFace
+    if cfg["train"]["pretrained_tag"] in pretrained_local_mapping:
+        # default path
+        ptd = pretrained_local_mapping[cfg["train"]["pretrained_tag"]]
+    else:
+        ptd = cfg["train"]["pretrained_model"]
+    assert pathlib.Path(ptd).exists(), "pretrained model path not exists, please save it to public folder first!"
+    return ptd
+
+
+def get_tokenizer_and_model(cfg, label_map=None, num_labels=None):
+    if num_labels is None:
+        num_labels = cfg["data"]["num_labels"]
+
+    tokenizer = None
+    model = None
+    ptd = get_pretrained_model_path(cfg)
+
+    # Huawei nezha
+    if cfg["train"]["model_name"] == "nezha":
+        bert_config = NeZhaConfig().from_json_file(os.path.join(ptd, "bert_config.json"))
+        if ptd:
+            tokenizer = tokenization.BertTokenizer(vocab_file=os.path.join(ptd, "vocab.txt"), do_lower_case=True)
+            logger.info('vocab size is %d' % (len(tokenizer.vocab)))
         else:
-            return NeZhaForTokenClassification(bert_config, num_labels=num_labels)
-    elif args.task_name == "textclf":
-        if args.model_name == "nezha":
-            if args.encode_document:
-                model = NeZhaForDocumentClassification(bert_config, args.doc_inner_batch_size, num_labels=num_labels)
-                if args.freeze_encoder:
-                    model.freeze_encoder()
-                    model.unfreeze_encoder_last_layers()
-                return model
+            logger.error("BERT vocab file not set, please check your ber_model_dir or trained_model_dir")
+
+        if cfg["train"]["task_name"] == "ner":
+            if cfg["train"]["ner_addBilstm"]:
+                model = NeZhaBiLSTMForTokenClassification(bert_config, label_map, num_labels=num_labels)
             else:
-                return NeZhaForSequenceClassification(bert_config, num_labels=num_labels)
-        else:
-            logger.error("can not find the proper model type...")
-            return None
-    elif args.task_name == "tag":
-        if args.encode_document:
-            model = NeZhaForDocumentTagClassification(bert_config, args.doc_inner_batch_size, num_labels=num_labels)
-            if args.freeze_encoder:
-                model.freeze_encoder()
-                model.unfreeze_encoder_last_layers()
-            return model
-        else:
-            return NeZhaForTagClassification(bert_config, num_labels=num_labels)
-    elif args.task_name == "summary":
-        if args.model_name == "bart" or args.model_name == "mbart":
+                model = NeZhaForTokenClassification(bert_config, label_map, num_labels=num_labels)
+        if cfg["train"]["task_name"] == "textclf":
+            if cfg["train"]["encode_document"]:
+                model = NeZhaForDocumentClassification(bert_config, cfg["train"]["doc_inner_batch_size"], num_labels=num_labels)
+            else:
+                model = NeZhaForSequenceClassification(bert_config, num_labels=num_labels)
+        if cfg["train"]["task_name"] == "tag":
+            if cfg["train"]["encode_document"]:
+                model = NeZhaForDocumentTagClassification(bert_config, cfg["train"]["doc_inner_batch_size"], num_labels=num_labels)
+            else:
+                model = NeZhaForTagClassification(bert_config, num_labels=num_labels)
+        model.load_state_dict(torch.load(os.path.join(ptd, 'pytorch_model.bin')))
+    # facebook bart/mbart
+    elif cfg["train"]["model_name"] == "bart" or cfg["train"]["model_name"] == "mbart":
+        from models.tokenization_mbart import MBartTokenizer
+        tokenizer = MBartTokenizer.from_pretrained(ptd)
+        if cfg["train"]["task_name"] == "summary" or cfg["train"]["task_name"] == "translation":
             from models.modeling_mbart import MBartForConditionalGeneration
-            gradient_checkpointing_flag = True if args.gradient_checkpointing else False
+            gradient_checkpointing_flag = True if cfg["train"]["gradient_checkpointing"] else False
             if gradient_checkpointing_flag:
                 logger.info("gradient checkpointing enabled")
-            model = MBartForConditionalGeneration.from_pretrained("facebook/mbart-large-cc25", gradient_checkpointing=gradient_checkpointing_flag)
-            if args.freeze_encoder:
-                model.freeze_encoder()
-                model.unfreeze_encoder_last_layers()
-            return model
-        elif args.model_name == "bart" or args.model_name == "mbart":
-            from models.tokenization_t5 import T5Tokenizer
+            model = MBartForConditionalGeneration.from_pretrained(ptd, gradient_checkpointing=gradient_checkpointing_flag)
+    # google t5/mt5
+    elif cfg["train"]["model_name"] == "t5" or cfg["train"]["model_name"] == "mt5":
+        from models.tokenization_t5 import T5Tokenizer
+        tokenizer = T5Tokenizer.from_pretrained(ptd)
+        if cfg["train"]["task_name"] == "summary" or cfg["train"]["task_name"] == "translation":
             from models.modeling_mt5 import MT5ForConditionalGeneration
-            pretrained_tag = "/mnt/dl/public/pretrained_models/mt5-base"
-            model = MT5ForConditionalGeneration.from_pretrained(pretrained_tag)
-            if args.freeze_encoder:
-                model.freeze_encoder()
-                model.unfreeze_encoder_last_layers()
-            return model
-    elif args.task_name == "translation":
-        from models.modeling_mbart import MBartForConditionalGeneration
-        gradient_checkpointing_flag = True if args.gradient_checkpointing else False
-        if gradient_checkpointing_flag:
-            logger.info("gradient checkpointing enabled")
-        model = MBartForConditionalGeneration.from_pretrained("facebook/mbart-large-cc25", gradient_checkpointing=gradient_checkpointing_flag)
-        if args.freeze_encoder:
-            model.freeze_encoder()
-            model.unfreeze_encoder_last_layers()
-        return model
+            model = MT5ForConditionalGeneration.from_pretrained(ptd)
     else:
-        logger.error("task type not supported!")
-        return None
+        logger.error("model type not supported!")
+
+    assert tokenizer and model, "get tokenizer or model error"
+    if cfg["train"]["freeze_encoder"] and "freeze_encoder" in dir(model):
+        model.freeze_encoder()
+        if "unfreeze_encoder_last_layers" in dir(model):
+            model.unfreeze_encoder_last_layers()
+    return tokenizer, model
 
 
-def save_model(args, tokenizer, model, epoch=None, step=None):
+def save_model(cfg, tokenizer, model, epoch=None, step=None):
     if epoch is not None:
-        assert isinstance(epoch, int) and isinstance(step, int), "type error"
+        assert isinstance(epoch, int) and isinstance(step, int), "type of epoch and step should be int"
         sub_dir = "models_ep_" + str(epoch) + "_step_" + str(step)
     else:
         sub_dir = "models"
-    if args.model_name == "nezha":
+    if cfg["train"]["model_name"] == "nezha":
+        # Save vocab.txt
+        ptd = get_pretrained_model_path(cfg)
+        shutil.copyfile(os.path.join(ptd, "vocab.txt"), os.path.join(cfg["train"]["output_dir"], "vocab.txt"))
         # Save a trained model and the associated configuration
         model_to_save = model.module if hasattr(model, 'module') else model  # Only save the model it-self
-        output_model_file = os.path.join(args.output_dir, sub_dir, "pytorch_model.bin")
+        output_model_file = os.path.join(cfg["train"]["output_dir"], sub_dir, "pytorch_model.bin")
         torch.save(model_to_save.state_dict(), output_model_file)
-        output_config_file = os.path.join(args.output_dir, sub_dir, "bert_config.json")
+        output_config_file = os.path.join(cfg["train"]["output_dir"], sub_dir, "bert_config.json")
         with open(output_config_file, 'w') as f:
             f.write(model_to_save.config.to_json_string())
     else:
-        saved_path = os.path.join(args.output_dir, sub_dir)
+        saved_path = os.path.join(cfg["train"]["output_dir"], sub_dir)
         tokenizer.save_pretrained(saved_path)
         model.save_pretrained(saved_path)

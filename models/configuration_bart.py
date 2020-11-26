@@ -208,6 +208,9 @@ class BartConfig(PretrainedConfig):
 
         self.do_blenderbot_90_layernorm = do_blenderbot_90_layernorm
 
+        # gradient_checkpointing
+        self.gradient_checkpointing = False
+
     @property
     def num_attention_heads(self) -> int:
         return self.encoder_attention_heads
