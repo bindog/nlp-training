@@ -496,31 +496,21 @@ class DecoderLayer(nn.Module):
         if self.gradient_checkpointing:
             self_prev_key = layer_state["self"]["prev_key"]
             self_prev_value = layer_state["self"]["prev_value"]
-            self_prev_key_padding_mask = layer_state["self"]["prev_key_padding_mask"]
-            if self_prev_key_padding_mask is None:
-                self_prev_key_padding_mask = torch.zeros(1, requires_grad=True)
-            else:
-                self_prev_key_padding_mask = self_prev_key_padding_mask.float()
-                self_prev_key_padding_mask.requires_grad = True
-
             ed_prev_key = layer_state["encoder_decoder"]["prev_key"]
             ed_prev_value = layer_state["encoder_decoder"]["prev_value"]
-            ed_prev_key_padding_mask = layer_state["encoder_decoder"]["prev_key_padding_mask"]
-            if ed_prev_key_padding_mask is None:
-                ed_prev_key_padding_mask = torch.zeros(1, requires_grad=True)
 
             if self_attn_weights is None:
                 self_attn_weights = torch.zeros(1, requires_grad=True)
+            if cross_attn_weights is None:
+                cross_attn_weights = torch.zeros(1, requires_grad=True)
             return (
                 x,
                 self_attn_weights,
                 cross_attn_weights,
                 self_prev_key,
                 self_prev_value,
-                self_prev_key_padding_mask,
                 ed_prev_key,
                 ed_prev_value,
-                ed_prev_key_padding_mask
             )
         else:
             return (
@@ -652,29 +642,23 @@ class BartDecoder(nn.Module):
                             causal_mask=decoder_causal_mask,
                             output_attentions=output_attentions
                         )
-
                     return custom_forward
 
-                x, layer_self_attn, layer_cross_attn, self_prev_key, self_prev_value, self_prev_key_padding_mask, ed_prev_key, ed_prev_value, ed_prev_key_padding_mask = torch.utils.checkpoint.checkpoint(
+                x, layer_self_attn, layer_cross_attn, self_prev_key, self_prev_value, ed_prev_key, ed_prev_value = torch.utils.checkpoint.checkpoint(
                     create_custom_forward(decoder_layer),
                     x,
                     encoder_hidden_states
                 )
                 layer_self_attn = None if layer_self_attn.byte().item() == 0 else layer_self_attn
-                if len(self_prev_key_padding_mask.size()) == 1 and self_prev_key_padding_mask.byte().item() == 0:
-                    self_prev_key_padding_mask = None
-                else:
-                    self_prev_key_padding_mask = self_prev_key_padding_mask > 0.5
+                layer_cross_attn = None if layer_cross_attn.byte().item() == 0 else layer_cross_attn
                 layer_past = {
                     "self": {
                         "prev_key": self_prev_key,
                         "prev_value": self_prev_value,
-                        "prev_key_padding_mask": self_prev_key_padding_mask
                     },
                     "encoder_decoder": {
                         "prev_key": ed_prev_key,
                         "prev_value": ed_prev_value,
-                        "prev_key_padding_mask": None if ed_prev_key_padding_mask.byte().item() == 0 else ed_prev_key_padding_mask
                     }
                 }
             else:
