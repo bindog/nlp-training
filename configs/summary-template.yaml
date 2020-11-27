@@ -10,8 +10,11 @@ train:
     fp16: false
     output_dir: "/path/to/the/output/dir"  # store wandb logs and trained model files
 eval:
+    type: "nlg"  # natural language generation
     batch_size: 4
     metric: "bleu"
+    num_beams: 4
+    early_stopping: True
 data:
     corpus: "corpus_name"
     data_dir: "/path/to/the/data/dir"

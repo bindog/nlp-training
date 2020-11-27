@@ -96,6 +96,7 @@ def get_tokenizer_and_model(cfg, label_map=None, num_labels=None):
                 model = NeZhaForDocumentTagClassification(bert_config, cfg["train"]["doc_inner_batch_size"], num_labels=num_labels)
             else:
                 model = NeZhaForTagClassification(bert_config, num_labels=num_labels)
+        # FIXME pytorch_model.bin path subdir
         model.load_state_dict(torch.load(os.path.join(ptd, 'pytorch_model.bin')))
     # facebook bart/mbart
     elif cfg["train"]["model_name"] == "bart" or cfg["train"]["model_name"] == "mbart":
@@ -125,12 +126,16 @@ def get_tokenizer_and_model(cfg, label_map=None, num_labels=None):
     return tokenizer, model
 
 
-def save_model(cfg, tokenizer, model, epoch=None, step=None):
-    if epoch is not None:
-        assert isinstance(epoch, int) and isinstance(step, int), "type of epoch and step should be int"
-        sub_dir = "models_ep_" + str(epoch) + "_step_" + str(step)
+def save_model(cfg, tokenizer, model, best=False, epoch=None, step=None):
+    if best:
+        sub_dir = "best_models"
     else:
-        sub_dir = "models"
+        if epoch is not None:
+            assert isinstance(epoch, int) and isinstance(step, int), "type of epoch and step should be int"
+            sub_dir = "models_ep_" + str(epoch) + "_step_" + str(step)
+        else:
+            sub_dir = "models"
+
     if cfg["train"]["model_name"] == "nezha":
         # Save vocab.txt
         ptd = get_pretrained_model_path(cfg)
