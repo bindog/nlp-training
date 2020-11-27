@@ -56,7 +56,7 @@ def get_dataloader(cfg, tokenizer, num_labels, split, debug=False):
         dataset = TextclfDataset(json_file, tokenizer, num_labels, cfg["train"]["doc_inner_batch_size"], cfg["data"]["max_seq_length"], cfg["train"]["encode_document"], longformer, tag=True)
     elif cfg["train"]["task_name"] == "summary":
         from datasets.summarization import SummarizationDataset
-        dataset = SummarizationDataset(json_file, tokenizer, max_target_length=cfg["data"]["max_tgt_length"])
+        dataset = SummarizationDataset(json_file, tokenizer, max_source_length=cfg["data"]["max_src_length"], max_target_length=cfg["data"]["max_tgt_length"])
     elif cfg["train"]["task_name"] == "translation":
         from datasets.translation import TranslationDataset
         dataset = TranslationDataset(json_file, tokenizer)
