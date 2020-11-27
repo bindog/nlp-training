@@ -135,21 +135,20 @@ def eval_loop(cfg, tokenizer, model, eval_dataloader, debug=False):
         # natural language generation, using generate and beam search
         elif cfg["eval"]["type"] == "nlg":
             input_ids = inputs["input_ids"].cuda()
-            with torch.no_grad():
-                pred_ids = model.generate(
-                                        input_ids,
-                                        num_beams=cfg["eval"]["num_beams"],
-                                        max_length=cfg["data"]["max_tgt_length"],
-                                        early_stopping=cfg["eval"]["early_stopping"]
-                                    )
-                pred_text = [tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in pred_ids]
-                label_text = [tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in label_ids]
-                pred_list.extend(pred_text)
-                label_list.extend(label_text)
+            pred_ids = model.generate(
+                                    input_ids,
+                                    num_beams=cfg["eval"]["num_beams"],
+                                    max_length=cfg["data"]["max_tgt_length"],
+                                    early_stopping=cfg["eval"]["early_stopping"]
+                                )
+            pred_text = [tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in pred_ids]
+            label_text = [tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in label_ids]
+            pred_list.extend(pred_text)
+            label_list.extend(label_text)
 
-                # get the first example from the batch as wandb demo case
-                raw_text_0 = tokenizer.decode(input_ids[0], skip_special_tokens=True, clean_up_tokenization_spaces=False)
-                table.add_data(raw_text_0, pred_text[0], label_text[0])
+            # get the first example from the batch as wandb demo case
+            raw_text_0 = tokenizer.decode(input_ids[0], skip_special_tokens=True, clean_up_tokenization_spaces=False)
+            table.add_data(raw_text_0, pred_text[0], label_text[0])
 
         if debug:
             break
