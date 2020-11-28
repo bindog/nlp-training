@@ -158,6 +158,7 @@ def eval_loop(cfg, tokenizer, model, eval_dataloader, debug=False):
     for k, v in results.items():
         logger.info(k + ": " + str(v))
     if not debug:
+        wandb.log({"examples": table})
         wandb.log(results)
 
     key_imp = list(results.keys())[0]
