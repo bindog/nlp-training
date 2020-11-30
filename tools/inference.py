@@ -281,3 +281,26 @@ class AttitudeInferenceService(object):
         print("debug attitude:", raw_attitude_text)
         attitude_text = "".join(raw_attitude_text)[-self.cloze_length:]
         return self.cloze_words.inv[attitude_text]
+
+
+class XSummaryInferenceService(object):
+    def __init__(self, model_dir, **kwargs):
+        from models.tokenization_t5 import T5Tokenizer
+        from models.modeling_mt5 import MT5ForConditionalGeneration
+        self.model = MT5ForConditionalGeneration.from_pretrained(model_dir)
+        self.tokenizer = T5Tokenizer.from_pretrained(model_dir)
+        self.model.cuda()
+        self.model.eval()
+        self.prefix = "英文摘要成中文: "
+
+    def input_preprocess(self, text):
+        processed_text = self.prefix + text
+        inputs = self.tokenizer([processed_text], max_length=1024, return_tensors='pt')
+        return inputs.input_ids
+
+    def inference(self, text):
+        input_ids = self.input_preprocess(text)
+        summary_ids = self.model.generate(input_ids.cuda(), num_beams=5, max_length=30, early_stopping=True, use_cache=True)
+        summary_text = self.tokenizer.decode(summary_ids[0], skip_special_tokens=True, clean_up_tokenization_spaces=False)
+        print("debug summary: ", summary_text)
+        return summary_text
