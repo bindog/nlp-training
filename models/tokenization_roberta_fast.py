@@ -12,21 +12,19 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Tokenization classes for RoBERTa."""
+"""Fast Tokenization classes for RoBERTa."""
 
 from typing import List, Optional
 
 import logging
-from .tokenization_utils import AddedToken
-from .tokenization_gpt2 import GPT2Tokenizer
+from .tokenization_utils_base import AddedToken
+from .tokenization_gpt2_fast import GPT2TokenizerFast
+from .tokenization_roberta import RobertaTokenizer
 
 
 logger = logging.getLogger(__name__)
 
-VOCAB_FILES_NAMES = {
-    "vocab_file": "vocab.json",
-    "merges_file": "merges.txt",
-}
+VOCAB_FILES_NAMES = {"vocab_file": "vocab.json", "merges_file": "merges.txt", "tokenizer_file": "tokenizer.json"}
 
 PRETRAINED_VOCAB_FILES_MAP = {
     "vocab_file": {
@@ -45,6 +43,14 @@ PRETRAINED_VOCAB_FILES_MAP = {
         "roberta-base-openai-detector": "https://huggingface.co/roberta-base/resolve/main/merges.txt",
         "roberta-large-openai-detector": "https://huggingface.co/roberta-large/resolve/main/merges.txt",
     },
+    "tokenizer_file": {
+        "roberta-base": "https://huggingface.co/roberta-base/resolve/main/tokenizer.json",
+        "roberta-large": "https://huggingface.co/roberta-large/resolve/main/tokenizer.json",
+        "roberta-large-mnli": "https://huggingface.co/roberta-large-mnli/resolve/main/tokenizer.json",
+        "distilroberta-base": "https://huggingface.co/distilroberta-base/resolve/main/tokenizer.json",
+        "roberta-base-openai-detector": "https://huggingface.co/roberta-base/resolve/main/tokenizer.json",
+        "roberta-large-openai-detector": "https://huggingface.co/roberta-large/resolve/main/tokenizer.json",
+    },
 }
 
 PRETRAINED_POSITIONAL_EMBEDDINGS_SIZES = {
@@ -57,17 +63,18 @@ PRETRAINED_POSITIONAL_EMBEDDINGS_SIZES = {
 }
 
 
-class RobertaTokenizer(GPT2Tokenizer):
+class RobertaTokenizerFast(GPT2TokenizerFast):
     """
-    Constructs a RoBERTa tokenizer, derived from the GPT-2 tokenizer, using byte-level Byte-Pair-Encoding.
+    Construct a "fast" RoBERTa tokenizer (backed by HuggingFace's `tokenizers` library), derived from the GPT-2
+    tokenizer, using byte-level Byte-Pair-Encoding.
 
     This tokenizer has been trained to treat spaces like parts of the tokens (a bit like sentencepiece) so a word will
     be encoded differently whether it is at the beginning of the sentence (without space) or not:
 
     ::
 
-        >>> from transformers import RobertaTokenizer
-        >>> tokenizer = RobertaTokenizer.from_pretrained("roberta-base")
+        >>> from transformers import RobertaTokenizerFast
+        >>> tokenizer = RobertaTokenizerFast.from_pretrained("roberta-base")
         >>> tokenizer("Hello world")['input_ids']
         [0, 31414, 232, 328, 2]
         >>> tokenizer(" Hello world")['input_ids']
@@ -78,8 +85,8 @@ class RobertaTokenizer(GPT2Tokenizer):
 
     .. note::
 
-        When used with ``is_split_into_words=True``, this tokenizer will add a space before each word (even the first
-        one).
+        When used with ``is_split_into_words=True``, this tokenizer needs to be instantiated with
+        ``add_prefix_space=True``.
 
     This tokenizer inherits from :class:`~transformers.PreTrainedTokenizerFast` which contains most of the main
     methods. Users should refer to this superclass for more information regarding those methods.
@@ -124,17 +131,21 @@ class RobertaTokenizer(GPT2Tokenizer):
         add_prefix_space (:obj:`bool`, `optional`, defaults to :obj:`False`):
             Whether or not to add an initial space to the input. This allows to treat the leading word just as any
             other word. (RoBERTa tokenizer detect beginning of words by the preceding space).
+        trim_offsets (:obj:`bool`, `optional`, defaults to :obj:`True`):
+            Whether the post processing step should trim offsets to avoid including whitespaces.
     """
 
     vocab_files_names = VOCAB_FILES_NAMES
     pretrained_vocab_files_map = PRETRAINED_VOCAB_FILES_MAP
     max_model_input_sizes = PRETRAINED_POSITIONAL_EMBEDDINGS_SIZES
     model_input_names = ["attention_mask"]
+    slow_tokenizer_class = RobertaTokenizer
 
     def __init__(
         self,
         vocab_file,
         merges_file,
+        tokenizer_file=None,
         errors="replace",
         bos_token="<s>",
         eos_token="</s>",
@@ -146,85 +157,54 @@ class RobertaTokenizer(GPT2Tokenizer):
         add_prefix_space=False,
         **kwargs
     ):
-        bos_token = AddedToken(bos_token, lstrip=False, rstrip=False) if isinstance(bos_token, str) else bos_token
-        eos_token = AddedToken(eos_token, lstrip=False, rstrip=False) if isinstance(eos_token, str) else eos_token
-        sep_token = AddedToken(sep_token, lstrip=False, rstrip=False) if isinstance(sep_token, str) else sep_token
-        cls_token = AddedToken(cls_token, lstrip=False, rstrip=False) if isinstance(cls_token, str) else cls_token
-        unk_token = AddedToken(unk_token, lstrip=False, rstrip=False) if isinstance(unk_token, str) else unk_token
-        pad_token = AddedToken(pad_token, lstrip=False, rstrip=False) if isinstance(pad_token, str) else pad_token
-
-        # Mask token behave like a normal word, i.e. include the space before it
-        mask_token = AddedToken(mask_token, lstrip=True, rstrip=False) if isinstance(mask_token, str) else mask_token
-
         super().__init__(
-            vocab_file=vocab_file,
-            merges_file=merges_file,
+            vocab_file,
+            merges_file,
+            tokenizer_file=tokenizer_file,
             errors=errors,
             bos_token=bos_token,
             eos_token=eos_token,
-            unk_token=unk_token,
             sep_token=sep_token,
             cls_token=cls_token,
+            unk_token=unk_token,
             pad_token=pad_token,
             mask_token=mask_token,
             add_prefix_space=add_prefix_space,
             **kwargs,
         )
 
-    def build_inputs_with_special_tokens(
-        self, token_ids_0: List[int], token_ids_1: Optional[List[int]] = None
-    ) -> List[int]:
+    @property
+    def mask_token(self) -> str:
         """
-        Build model inputs from a sequence or a pair of sequence for sequence classification tasks by concatenating and
-        adding special tokens. A RoBERTa sequence has the following format:
+        :obj:`str`: Mask token, to use when training a model with masked-language modeling. Log an error if used while
+        not having been set.
 
-        - single sequence: ``<s> X </s>``
-        - pair of sequences: ``<s> A </s></s> B </s>``
-
-        Args:
-            token_ids_0 (:obj:`List[int]`):
-                List of IDs to which the special tokens will be added.
-            token_ids_1 (:obj:`List[int]`, `optional`):
-                Optional second list of IDs for sequence pairs.
-
-        Returns:
-            :obj:`List[int]`: List of `input IDs <../glossary.html#input-ids>`__ with the appropriate special tokens.
+        Roberta tokenizer has a special mask token to be usble in the fill-mask pipeline. The mask token will greedily
+        comprise the space before the `<mask>`.
         """
+        if self._mask_token is None and self.verbose:
+            logger.error("Using mask_token, but it is not set yet.")
+            return None
+        return str(self._mask_token)
+
+    @mask_token.setter
+    def mask_token(self, value):
+        """
+        Overriding the default behavior of the mask token to have it eat the space before it.
+
+        This is needed to preserve backward compatibility with all the previously used models based on Roberta.
+        """
+        # Mask token behave like a normal word, i.e. include the space before it
+        # So we set lstrip to True
+        value = AddedToken(value, lstrip=True, rstrip=False) if isinstance(value, str) else value
+        self._mask_token = value
+
+    def build_inputs_with_special_tokens(self, token_ids_0, token_ids_1=None):
+        output = [self.bos_token_id] + token_ids_0 + [self.eos_token_id]
         if token_ids_1 is None:
-            return [self.cls_token_id] + token_ids_0 + [self.sep_token_id]
-        cls = [self.cls_token_id]
-        sep = [self.sep_token_id]
-        return cls + token_ids_0 + sep + sep + token_ids_1 + sep
+            return output
 
-    def get_special_tokens_mask(
-        self, token_ids_0: List[int], token_ids_1: Optional[List[int]] = None, already_has_special_tokens: bool = False
-    ) -> List[int]:
-        """
-        Retrieve sequence ids from a token list that has no special tokens added. This method is called when adding
-        special tokens using the tokenizer ``prepare_for_model`` method.
-
-        Args:
-            token_ids_0 (:obj:`List[int]`):
-                List of IDs.
-            token_ids_1 (:obj:`List[int]`, `optional`):
-                Optional second list of IDs for sequence pairs.
-            already_has_special_tokens (:obj:`bool`, `optional`, defaults to :obj:`False`):
-                Whether or not the token list is already formatted with special tokens for the model.
-
-        Returns:
-            :obj:`List[int]`: A list of integers in the range [0, 1]: 1 for a special token, 0 for a sequence token.
-        """
-        if already_has_special_tokens:
-            if token_ids_1 is not None:
-                raise ValueError(
-                    "You should not supply a second sequence if the provided sequence of "
-                    "ids is already formatted with special tokens for the model."
-                )
-            return list(map(lambda x: 1 if x in [self.sep_token_id, self.cls_token_id] else 0, token_ids_0))
-
-        if token_ids_1 is None:
-            return [1] + ([0] * len(token_ids_0)) + [1]
-        return [1] + ([0] * len(token_ids_0)) + [1, 1] + ([0] * len(token_ids_1)) + [1]
+        return output + [self.eos_token_id] + token_ids_1 + [self.eos_token_id]
 
     def create_token_type_ids_from_sequences(
         self, token_ids_0: List[int], token_ids_1: Optional[List[int]] = None
@@ -248,9 +228,3 @@ class RobertaTokenizer(GPT2Tokenizer):
         if token_ids_1 is None:
             return len(cls + token_ids_0 + sep) * [0]
         return len(cls + token_ids_0 + sep + sep + token_ids_1 + sep) * [0]
-
-    def prepare_for_tokenization(self, text, is_split_into_words=False, **kwargs):
-        add_prefix_space = kwargs.pop("add_prefix_space", self.add_prefix_space)
-        if (is_split_into_words or add_prefix_space) and (len(text) > 0 and not text[0].isspace()):
-            text = " " + text
-        return (text, kwargs)
