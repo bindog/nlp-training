@@ -13,7 +13,9 @@ pretrained_local_mapping = {
     "facebook/mbart-large-cc25": "/mnt/dl/public/pretrained_models/mbart-large-cc25",
     "google/mt5-base": "/mnt/dl/public/pretrained_models/mt5-base",
     "google/mt5-large": "/mnt/dl/public/pretrained_models/mt5-large",
-    "hfl/chinese-roberta-wwm-ext": "/mnt/dl/public/pretrained_models/chinese_roberta_wwm_ext/",
+    "hfl/chinese-bert-wwm": "chinese-bert-wwm",
+    "hfl/chinese-bert-wwm-ext": "/mnt/dl/public/pretrained_models/chinese-bert-wwm-ext/",
+    "hfl/chinese-roberta-wwm-ext": "/mnt/dl/public/pretrained_models/chinese-roberta-wwm-ext/",
     "hfl/chinese-roberta-wwm-ext-large/": "/mnt/dl/public/pretrained_models/chinese-roberta-wwm-ext-large/"
 }
 
