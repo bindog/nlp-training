@@ -15,12 +15,15 @@ def evaluate_bleu(summary, references, lang="zh"):
 
 
 def evaluate_rouge(summary, references, n=1, lang="zh"):
-    rouge_calc = RougeCalculator(stopwords=True, lang="en")
+    rouge_calc = RougeCalculator(stopwords=True, lang=lang)
     assert len(summary) == len(references), "number of summary and references should be equal"
 
     rouges = []
     for s, rs in zip(summary, references):
-        rouge_n = rouge_calc.rouge_n(s, rs, n)
-        scores.append(rouge_n)
-    rouge_avg = sum(scores) /  len(scores)
+        if n == 'l':
+            rouge_n = rouge_calc.rouge_l(s, rs)
+        else:
+            rouge_n = rouge_calc.rouge_n(s, rs, n)
+        rouges.append(rouge_n)
+    rouge_avg = sum(rouges) /  len(rouges)
     return rouge_avg, rouges

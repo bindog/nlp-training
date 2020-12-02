@@ -4,6 +4,8 @@ import logging
 import mmap
 from itertools import chain, repeat
 from multiprocessing import Pool, Process, current_process
+import torch.multiprocessing
+torch.multiprocessing.set_sharing_strategy('file_system')
 
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -124,7 +126,7 @@ def process_chunk(chunk, tokenizer, num_labels=11, max_seq_per_doc=5, max_seq_le
                 all_input_ids.append(input_ids)
                 all_input_mask.append(input_mask)
                 all_segment_ids.append(segment_ids)
-                all_label_ids.append(label_ids)
+                # all_label_ids.append(label_ids)
 
                 s_index = e_index
                 e_index = s_index + max_seq_length - 2
@@ -247,8 +249,8 @@ class TextclfDataset(torch.utils.data.Dataset):
         else:
             return {
                 "input_ids": self.all_input_ids[i],
-                "input_mask": self.all_input_mask[i],
-                "segment_ids": self.all_segment_ids[i],
+                "attention_mask": self.all_input_mask[i],
+                "token_type_ids": self.all_segment_ids[i],
                 "labels": self.all_label_ids[i]
             }
 

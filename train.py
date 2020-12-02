@@ -57,14 +57,13 @@ def train_loop(cfg, model, train_dataloader, optimizer, lr_scheduler, num_gpus, 
             with autocast():
                 outputs = model(**inputs)
                 loss = outputs[0]
-        # FIXME ner bilstm condition not correct
-        # elif cfg["train"]["ner_addBilstm"]:
-        #     loss = model.neg_log_likelihood(**inputs)
         else:
             outputs = model(**inputs)
             # We don't use .loss here since the model may return tuples instead of ModelOutput.
             if isinstance(outputs, tuple):
                 loss = outputs[0]
+            elif isinstance(outputs, torch.Tensor):
+                loss = outputs
             else:
                 loss = outputs.loss
 
@@ -111,7 +110,7 @@ def train_loop(cfg, model, train_dataloader, optimizer, lr_scheduler, num_gpus, 
             break
 
 
-def eval_loop(cfg, tokenizer, model, eval_dataloader, debug=False):
+def eval_loop(cfg, tokenizer, model, eval_dataloader, label_map, debug=False):
     model.eval()
     pred_list = []
     label_list = []
@@ -127,11 +126,14 @@ def eval_loop(cfg, tokenizer, model, eval_dataloader, debug=False):
                 logits = model(**inputs)
                 if isinstance(logits, tuple):
                     logits = logits[0]
+                elif isinstance(logits, dict):
+                    logits = logits["logits"]
             pred_list.append(logits.detach().cpu())
             label_list.append(label_ids)
             # FIXME get the predicted label and ground truth label
-            raw_text_0 = tokenizer.decode(input_ids[0], skip_special_tokens=True, clean_up_tokenization_spaces=False)
-            table.add_data(raw_text_0, pred_list[0], label_list[0])
+            # raw_text_0 = tokenizer.decode(input_ids[0], skip_special_tokens=True, clean_up_tokenization_spaces=False)
+            # table.add_data(raw_text_0, pred_list[0], label_list[0])
+            table.add_data('', pred_list[0], label_list[0])
         # natural language generation, using generate and beam search
         elif cfg["eval"]["type"] == "nlg":
             input_ids = inputs["input_ids"].cuda()
@@ -153,13 +155,12 @@ def eval_loop(cfg, tokenizer, model, eval_dataloader, debug=False):
         if debug:
             break
 
-    results = eval_wrapper(cfg, pred_list, label_list)
+    results = eval_wrapper(cfg, pred_list, label_list, label_map)
     logger.info("Result of evaluation metric: " + cfg["eval"]["metric"])
     for k, v in results.items():
         logger.info(k + ": " + str(v))
     if not debug:
-        wandb.log({"examples": table})
-        wandb.log(results)
+        wandb.log({"examples": table, "score_results": results})
 
     key_imp = list(results.keys())[0]
     return results[key_imp]
@@ -199,8 +200,9 @@ def main():
         output_dir_pl.mkdir(parents=True, exist_ok=True)
 
     if not args.debug:
-        wandb.init(project="nlp-task", dir=cfg["train"]["output_dir"])
-        wandb.run.name = cfg["data"]["corpus"] + '-' + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        config_dictionary = dict(yaml=cfg, params=args)
+        wandb.init(config=config_dictionary, project="nlp-task", dir=cfg["train"]["output_dir"])
+        wandb.run.name = cfg["data"]["corpus"] + '-' + cfg["train"]["pretrained_tag"] + '-' + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         wandb.config.update(args)
         wandb.run.save()
 
@@ -280,7 +282,7 @@ def main():
         train_loop(cfg, model, train_dataloader, optimizer, lr_scheduler, num_gpus, epoch, scaler, args.debug)
         # begin to evaluate
         logger.info("running evaluation on dev set")
-        score = eval_loop(cfg, tokenizer, model, eval_dataloader, args.debug)
+        score = eval_loop(cfg, tokenizer, model, eval_dataloader, label_map, args.debug)
         if best_score < score:
             best_score = score
             best = True
@@ -294,7 +296,7 @@ def main():
         logger.info("running evaluation on final test set")
         # TODO new test set?
         _, eval_dataloader = get_dataloader(cfg, tokenizer, num_labels, "dev", debug=args.debug)
-        score = eval_loop(cfg, tokenizer, model, eval_dataloader, args.debug)
+        score = eval_loop(cfg, tokenizer, model, eval_dataloader, label_map, args.debug)
 
 
 if __name__ == "__main__":

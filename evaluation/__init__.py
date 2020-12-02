@@ -1,12 +1,20 @@
 import os
+import torch
+import numpy as np
 
 
-def eval_wrapper(cfg, pred_list, label_list):
+def eval_wrapper(cfg, pred_list, label_list, label_map):
     if cfg["train"]["task_name"] == "ner":
-        from seqeval.metrics import classification_report, precision_score, recall_score, f1_score
+        from seqeval.metrics import precision_score, recall_score, f1_score
+        import torch.nn.functional as F
+        y_true = []
+        y_pred = []
         for logits, label_ids in zip(pred_list, label_list):
             # FIXME ner bilstm
-            logits = torch.argmax(F.log_softmax(logits, dim=2), dim=2)
+            if not cfg["train"]["ner_addBilstm"]:
+                logits = torch.argmax(F.log_softmax(logits, dim=2), dim=2)
+            logits = logits.numpy()
+            label_ids = label_ids.numpy()
             for i, label in enumerate(label_ids):
                 temp_1 = []
                 temp_2 = []
@@ -20,8 +28,6 @@ def eval_wrapper(cfg, pred_list, label_list):
                     else:
                         temp_1.append(label_map[label_ids[i][j]])
                         temp_2.append(label_map[logits[i][j]])
-        report = classification_report(y_true, y_pred, digits=4)
-        logger.info("\n%s", report)
         eval_precision = precision_score(y_true, y_pred)
         eval_recall = recall_score(y_true, y_pred)
         eval_f1 = f1_score(y_true, y_pred)
@@ -53,16 +59,33 @@ def eval_wrapper(cfg, pred_list, label_list):
 
     elif cfg["train"]["task_name"] == "summary" or cfg["train"]["task_name"] == "translation":
         if cfg["eval"]["metric"] == "bleu":
-            from .summarization_eval import evaluate_bleu
-            avg_score, scores = evaluate_bleu(pred_list, label_list)
-            results = {
-                "bleu_avg_score": avg_score,
-                # FIXME
-                # "bleu_scores": scores
-            }
+            results = score_bleu(pred_list, label_list)
         elif cfg["eval"]["metric"] == "rouge":
-            # FIXME
-            # ...
-            pass
+            results = score_rouge(pred_list, label_list)
+        elif cfg["eval"]["metric"] == "both":
+            results = score_bleu(pred_list, label_list)
+            results.update(score_rouge(pred_list, label_list))
 
+    return results
+
+def score_bleu(pred_list, label_list):
+    from .summarization_eval import evaluate_bleu
+    avg_score, scores = evaluate_bleu(pred_list, label_list)
+    results = {
+        "bleu_avg_score": avg_score,
+        # FIXME
+        # "bleu_all_score": scores
+    }
+    return results
+
+def score_rouge(pred_list, label_list):
+    from .summarization_eval import evaluate_rouge
+    rouge_1 = evaluate_rouge(pred_list, label_list, n=1, lang="zh")
+    rouge_2 = evaluate_rouge(pred_list, label_list, n=2, lang="zh")
+    rouge_l = evaluate_rouge(pred_list, label_list, n='l', lang="zh")
+    results = {
+        "rouge-1": rouge_1[0],
+        "rouge-2": rouge_2[0],
+        "rouge-L": rouge_l[0]
+    }
     return results

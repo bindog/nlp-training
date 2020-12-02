@@ -1,25 +1,27 @@
 train:
-    task_name: "summary"
-    model_name: "mbart"
-    pretrained_tag: "facebook/mbart-large-cc25"
+    task_name: "textclf"
+    model_name: "nezha"
+    pretrained_tag: "huawei/nezha-zh-base"
     pretrained_model: "/path/to/the/pretrained/model"
-    batch_size: 8
+    batch_size: 48
     train_epochs: 5.0
     freeze_encoder: true
     gradient_checkpointing: true
     fp16: false
+    doc_inner_batch_size: 5
+    encode_document: False
     output_dir: "/path/to/the/output/dir"  # store wandb logs and trained model files
 eval:
-    type: "nlg"  # natural language generation
-    batch_size: 4
-    metric: "bleu"  # blue, rouge, both
-    num_beams: 4
+    type: "nlu"  # natural language generation
+    batch_size: 24
+    metric: "precision"
+    num_beams: 16
     early_stopping: True
 data:
     corpus: "corpus_name"
     data_dir: "/path/to/the/data/dir"
     num_labels: -1
-    max_src_length: 1024
+    max_seq_length: 128
     max_tgt_length: 56
     crosslingual: false
 optimizer:

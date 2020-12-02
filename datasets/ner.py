@@ -120,7 +120,7 @@ def split_chunks(filename, grain=10000):
     using mmap and seek identifier to split whole file into small chunks
     then use multiprocessing to speed up process
     '''
-    f = open(filename, "r+b")
+    f = open(filename, "rb")
     s = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
     start = 0
     prefix = b'{"id": '

@@ -1,17 +1,17 @@
 train:
-    task_name: "summary"
+    task_name: "translation"
     model_name: "mbart"
     pretrained_tag: "facebook/mbart-large-cc25"
     pretrained_model: "/path/to/the/pretrained/model"
-    batch_size: 8
-    train_epochs: 5.0
+    batch_size: 16
+    train_epochs: 10.0
     freeze_encoder: true
     gradient_checkpointing: true
     fp16: false
     output_dir: "/path/to/the/output/dir"  # store wandb logs and trained model files
 eval:
     type: "nlg"  # natural language generation
-    batch_size: 4
+    batch_size: 16
     metric: "bleu"  # blue, rouge, both
     num_beams: 4
     early_stopping: True

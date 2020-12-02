@@ -882,12 +882,6 @@ class NeZhaBiLSTMForTokenClassification(BertPreTrainedModel):
                     + feats[:, t].gather(-1, label_ids[:, t].view(-1,1)).view(-1,1)
         return score
 
-    def neg_log_likelihood(self, input_ids, token_type_ids, attention_mask, labels):
-        feats = self._get_lstm_features(input_ids, token_type_ids, attention_mask)  #[batch_size, max_len, 16]
-        forward_score = self._forward_alg(feats)
-        gold_score = self._score_sentence(feats, labels)
-        return torch.mean(forward_score - gold_score)
-
     def _get_lstm_features(self, input_ids, token_type_ids, attention_mask):
         """sentence is the ids"""
         # self.hidden = self.init_hidden()
@@ -901,23 +895,14 @@ class NeZhaBiLSTMForTokenClassification(BertPreTrainedModel):
     def forward(self, input_ids, token_type_ids=None, attention_mask=None, labels=None):
 
         logits = self._get_lstm_features(input_ids, token_type_ids, attention_mask)  # [8, 180,768]
-        score, logits = self._viterbi_decode(logits)
-
         loss = None
         if labels is not None:
-            loss_fct = CrossEntropyLoss()
-            # Only keep active parts of the loss
-            if attention_mask is not None:
-                active_loss = attention_mask.view(-1) == 1
-                active_logits = logits.view(-1, self.num_labels)
-                active_labels = torch.where(
-                    active_loss, labels.view(-1), torch.tensor(loss_fct.ignore_index).type_as(labels)
-                )
-                loss = loss_fct(active_logits, active_labels)
-            else:
-                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+            forward_score = self._forward_alg(logits)
+            gold_score = self._score_sentence(logits, labels)
+            loss = torch.mean(forward_score - gold_score)
             return loss
         else:
+            score, logits = self._viterbi_decode(logits)
             return logits
 
 class NeZhaForMultipleChoice(BertPreTrainedModel):
