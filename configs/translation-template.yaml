@@ -13,14 +13,14 @@ eval:
     type: "nlg"  # natural language generation
     batch_size: 16
     metric: "bleu"  # blue, rouge, both
-    num_beams: 4
+    num_beams: 4  # beam search config
     early_stopping: True
 data:
     corpus: "corpus_name"
     data_dir: "/path/to/the/data/dir"
     num_labels: -1
-    max_src_length: 1024
-    max_tgt_length: 56
+    max_src_length: 512
+    max_tgt_length: 512
     crosslingual: false
 optimizer:
     type: "AdamW"

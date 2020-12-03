@@ -8,14 +8,12 @@ train:
     freeze_encoder: true
     gradient_checkpointing: true
     fp16: false
-    encode_document: False
     ner_addBilstm: False  # whether use a model with bilstm added 
     output_dir: "/path/to/the/output/dir"  # store wandb logs and trained model files
 eval:
-    type: "nlu"  # natural language generation
+    type: "nlu"  # natural language understanding 
     metric: "p-r-f1"  # precision, recall and f1
     batch_size: 16
-    num_beams: 16
     early_stopping: True
 data:
     corpus: "corpus_name"

@@ -8,14 +8,13 @@ train:
     freeze_encoder: true
     gradient_checkpointing: true
     fp16: false
-    doc_inner_batch_size: 5
-    encode_document: False
+    encode_document: False  # using RNN-like module to encode document after BERT
+    doc_inner_batch_size: 5  # if encode_document is True, then this argument decide the inner batch size
     output_dir: "/path/to/the/output/dir"  # store wandb logs and trained model files
 eval:
-    type: "nlu"  # natural language generation
+    type: "nlu"  # natural language understanding
     batch_size: 24
     metric: "precision"
-    num_beams: 16
     early_stopping: True
 data:
     corpus: "corpus_name"

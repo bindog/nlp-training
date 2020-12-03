@@ -13,7 +13,7 @@ eval:
     type: "nlg"  # natural language generation
     batch_size: 4
     metric: "bleu"  # blue, rouge, both
-    num_beams: 4
+    num_beams: 4  # beam search config
     early_stopping: True
 data:
     corpus: "corpus_name"
