@@ -132,7 +132,7 @@ class NERInferenceService(object):
         label_list = ["O", "B-PER", "I-PER", "B-ORG", "I-ORG", "B-LOC", "I-LOC",
                         "B-PRO", "I-PRO", "B-JOB", "I-JOB", "B-TIME", "I-TIME",
                         "B-COM", "I-COM", "X", "[CLS]", "[SEP]"]
-        self.label_map_reverse = {i : label for i, label in enumerate(label_list,1)}
+        self.label_map = {label: i  for i, label in enumerate(label_list,1)}
         num_labels = len(label_list) + 1
         self.mapping_dict = {
             "PER": "人名",
@@ -229,7 +229,7 @@ class NERInferenceService(object):
             logits = self.model(input_ids, segment_ids, input_mask)
         logits = torch.argmax(F.log_softmax(logits, dim=2), dim=2)
         logits = logits.detach().cpu().numpy()
-        label = [self.label_map_reverse[i] for i in logits[0]]
+        label = [self.label_map.inverse[i] for i in logits[0]]
         entity_list = self.parse_label(text, label)
 
         result = []

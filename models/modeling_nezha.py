@@ -743,7 +743,7 @@ class NeZhaBiLSTMForTokenClassification(BertPreTrainedModel):
 
     Params:
         `config`: a BertConfig class instance with the configuration to build a new model.
-        `label_map_reverse`: a map of label_name to label_id.
+        `label_map`: a map of label_name to label_id.
         `num_labels`: the number of classes for the classifier. Default = 2.
 
     Inputs:
@@ -774,12 +774,12 @@ class NeZhaBiLSTMForTokenClassification(BertPreTrainedModel):
     token_type_ids = torch.LongTensor([[0, 0, 1], [0, 1, 0]])
     label_ids = torch.LongTensor([[16, 1, 0], [16, 3, 0]])
 
-    label_map_reverse = {"I-COM": "15", "[CLS]": "16",}
+    label_map = {"15": "I-COM", "16": "[CLS]"}
     config = BertConfig(vocab_size_or_config_json_file=32000, hidden_size=768,
         num_hidden_layers=12, num_attention_heads=12, intermediate_size=3072)
 
     num_labels = 2
-    model = BertForSequenceClassification(config, label_map_reverse, num_labels)
+    model = BertForSequenceClassification(config, label_map, num_labels)
 
     # In train step, we use neg_log_likelihood to get loss.
     loss = model.neg_log_likelihood(input_ids, token_type_ids, input_mask, label_ids)
@@ -788,16 +788,16 @@ class NeZhaBiLSTMForTokenClassification(BertPreTrainedModel):
     logits = model(input_ids, segment_ids, input_mask, None)
     ```
     """
-    def __init__(self, config, label_map_reverse, num_labels):
+    def __init__(self, config, label_map, num_labels):
         super(NeZhaBiLSTMForTokenClassification, self).__init__(config)
         self.num_labels = num_labels
-        self.label_map_reverse = label_map_reverse
+        self.label_map = label_map
         self.hidden_size = config.hidden_size
         self.bert = NeZhaModel(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.bilstm = nn.LSTM(bidirectional=True, num_layers=2, input_size=config.hidden_size, hidden_size=config.hidden_size//2, batch_first=True)
         self.classifier = nn.Linear(config.hidden_size, self.num_labels)
-        self.start_label_id = self.label_map_reverse['[CLS]']
+        self.start_label_id = self.label_map.inverse['[CLS]']
         self.transitions = nn.Parameter(torch.randn(
             self.num_labels, self.num_labels
         ))

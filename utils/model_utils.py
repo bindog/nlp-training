@@ -16,7 +16,7 @@ pretrained_local_mapping = {
     "hfl/chinese-bert-wwm": "chinese-bert-wwm",
     "hfl/chinese-bert-wwm-ext": "/mnt/dl/public/pretrained_models/chinese-bert-wwm-ext/",
     "hfl/chinese-roberta-wwm-ext": "/mnt/dl/public/pretrained_models/chinese-roberta-wwm-ext/",
-    "hfl/chinese-roberta-wwm-ext-large/": "/mnt/dl/public/pretrained_models/chinese-roberta-wwm-ext-large/"
+    "hfl/chinese-roberta-wwm-ext-large": "/mnt/dl/public/pretrained_models/chinese-roberta-wwm-ext-large/"
 }
 
 
@@ -92,9 +92,8 @@ def get_tokenizer_and_model(cfg, label_map=None, num_labels=None):
             logger.error("BERT vocab file not set, please check your ber_model_dir or trained_model_dir")
 
         if cfg["train"]["task_name"] == "ner":
-            label_map_reverse = {v: k for k, v in label_map.items()}
             if cfg["train"]["ner_addBilstm"]:
-                model = NeZhaBiLSTMForTokenClassification(bert_config, label_map_reverse, num_labels=num_labels)
+                model = NeZhaBiLSTMForTokenClassification(bert_config, label_map, num_labels=num_labels)
             else:
                 model = NeZhaForTokenClassification(bert_config, num_labels=num_labels)
         if cfg["train"]["task_name"] == "textclf":
@@ -121,10 +120,9 @@ def get_tokenizer_and_model(cfg, label_map=None, num_labels=None):
         tokenizer = BertTokenizer.from_pretrained(pretrained_local_mapping[cfg["train"]["pretrained_tag"]])
         if cfg["train"]["task_name"] == "ner":
             from models.modeling_bert import BertForTokenClassification
-            label_map_reverse = {v: k for k, v in label_map.items()}
             if cfg["train"]["ner_addBilstm"]:
                 # FIXME Process BiLSTM
-                # model = NeZhaBiLSTMForTokenClassification(bert_config, label_map_reverse, num_labels=num_labels)
+                # model = NeZhaBiLSTMForTokenClassification(bert_config, label_map, num_labels=num_labels)
                 pass
             else:
                 model = BertForTokenClassification.from_pretrained(ptd, num_labels=num_labels)

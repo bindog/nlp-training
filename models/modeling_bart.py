@@ -21,6 +21,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import torch
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 from torch import Tensor, nn
 from torch.nn import CrossEntropyLoss
 
@@ -379,7 +380,7 @@ class BartEncoder(nn.Module):
 
                         return custom_forward
 
-                    x, attn = torch.utils.checkpoint.checkpoint(
+                    x, attn = checkpoint(
                         create_custom_forward(encoder_layer),
                         x,
                         attention_mask
@@ -644,7 +645,7 @@ class BartDecoder(nn.Module):
                         )
                     return custom_forward
 
-                x, layer_self_attn, layer_cross_attn, self_prev_key, self_prev_value, ed_prev_key, ed_prev_value = torch.utils.checkpoint.checkpoint(
+                x, layer_self_attn, layer_cross_attn, self_prev_key, self_prev_value, ed_prev_key, ed_prev_value = checkpoint(
                     create_custom_forward(decoder_layer),
                     x,
                     encoder_hidden_states

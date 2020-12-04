@@ -4,6 +4,7 @@ import logging
 import mmap
 from itertools import chain, repeat, dropwhile
 from multiprocessing import Pool, Process, current_process
+from bidict import bidict
 
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -22,7 +23,7 @@ def rindex(lst, item):
         return -1
 
 
-def process_chunk(chunk, tokenizer, label_map_reverse, num_labels=18, max_seq_length=128):
+def process_chunk(chunk, tokenizer, label_map, num_labels=18, max_seq_length=128):
     punctuation = ["，", "。", "：", "？", "！", "、", "；"]
 
     all_input_ids = []
@@ -39,12 +40,12 @@ def process_chunk(chunk, tokenizer, label_map_reverse, num_labels=18, max_seq_le
         words = info["word"]
         entity_list = info["entity"]
 
-        raw_label_ids = [label_map_reverse["O"]] * len(raw_text)
+        raw_label_ids = [label_map.inverse["O"]] * len(raw_text)
         for entity in entity_list:
             s, e, st, et = entity
 
-            raw_label_ids[s] = label_map_reverse[st]
-            raw_label_ids[s+1:e] = [label_map_reverse[et]] * (e-s-1)
+            raw_label_ids[s] = label_map.inverse[st]
+            raw_label_ids[s+1:e] = [label_map.inverse[et]] * (e-s-1)
 
         tokens_a = []
         for char in raw_text:
@@ -75,7 +76,7 @@ def process_chunk(chunk, tokenizer, label_map_reverse, num_labels=18, max_seq_le
                 eindex = sindex + max(p_list)
             else:
                 # find end by label
-                label_o_index = rindex(raw_label_ids[sindex:_eindex], label_map_reverse["O"])
+                label_o_index = rindex(raw_label_ids[sindex:_eindex], label_map.inverse["O"])
                 if label_o_index > 0:
                     eindex = sindex + label_o_index
                 else:
@@ -84,7 +85,7 @@ def process_chunk(chunk, tokenizer, label_map_reverse, num_labels=18, max_seq_le
 
             # convert and padding data
             tokens = ["[CLS]"] + tokens_a[sindex:eindex] + ["[SEP]"]
-            label_ids = [label_map_reverse["[CLS]"]] + raw_label_ids[sindex:eindex] + [label_map_reverse["[SEP]"]]
+            label_ids = [label_map.inverse["[CLS]"]] + raw_label_ids[sindex:eindex] + [label_map.inverse["[SEP]"]]
             segment_ids = [0] * len(tokens)
 
             input_ids = tokenizer.convert_tokens_to_ids(tokens)
@@ -160,11 +161,11 @@ class NERDataset(Dataset):
 
         with open(label_map_path, "r") as f:
             label_map = json.loads(f.read().strip())
-            self.label_map_reverse = {v:int(k) for k, v in label_map.items()}
+            self.label_map = bidict({int(k):v for k, v in label_map.items()})
 
         self.num_labels = num_labels
 
-        assert self.num_labels == len(self.label_map_reverse), "num_labels should equals to label_map"
+        assert self.num_labels == len(self.label_map), "num_labels should equals to label_map"
 
         logger.info("prepare ner dataset from: " + json_path)
         logger.info("number of labels: " + str(self.num_labels))
@@ -176,7 +177,7 @@ class NERDataset(Dataset):
         pool = Pool(16)
         results = pool.starmap(
             process_chunk,
-            zip(chunks, repeat(tokenizer), repeat(self.label_map_reverse), repeat(self.num_labels), repeat(max_seq_length))
+            zip(chunks, repeat(tokenizer), repeat(self.label_map), repeat(self.num_labels), repeat(max_seq_length))
         )
 
         all_results = []
