@@ -66,6 +66,18 @@ def eval_wrapper(cfg, pred_list, label_list, label_map):
             results = score_bleu(pred_list, label_list)
             results.update(score_rouge(pred_list, label_list))
 
+    elif cfg["train"]["task_name"] == "pet":
+        cloze_length = cfg["pet"]["pet_pattern"]["cloze_length"]
+        total = 0
+        right = 0
+        for pred, label in zip(pred_list, label_list):
+            total += 1
+            if pred[-cloze_length:] == label[-cloze_length:]:
+                right += 1
+        results = {
+            "eval_precision": right / total
+        }
+
     return results
 
 def score_bleu(pred_list, label_list):

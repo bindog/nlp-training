@@ -6,6 +6,10 @@ import logging
 from tools import official_tokenization as tokenization, utils
 
 
+logging.basicConfig(level=logging.INFO, format="[%(asctime)s %(filename)s %(lineno)d] %(message)s")
+logger = logging.getLogger(__name__)
+
+
 pretrained_local_mapping = {
     "huawei/nezha-en-base": "/mnt/dl/public/pretrained_models/NEZHA-Models/nezha-en-base",
     "huawei/nezha-zh-base": "/mnt/dl/public/pretrained_models/NEZHA-Models/nezha-zh-base",
@@ -13,15 +17,14 @@ pretrained_local_mapping = {
     "facebook/mbart-large-cc25": "/mnt/dl/public/pretrained_models/mbart-large-cc25",
     "google/mt5-base": "/mnt/dl/public/pretrained_models/mt5-base",
     "google/mt5-large": "/mnt/dl/public/pretrained_models/mt5-large",
-    "hfl/chinese-bert-wwm": "chinese-bert-wwm",
-    "hfl/chinese-bert-wwm-ext": "/mnt/dl/public/pretrained_models/chinese-bert-wwm-ext/",
-    "hfl/chinese-roberta-wwm-ext": "/mnt/dl/public/pretrained_models/chinese-roberta-wwm-ext/",
-    "hfl/chinese-roberta-wwm-ext-large": "/mnt/dl/public/pretrained_models/chinese-roberta-wwm-ext-large/"
+    "hfl/chinese-bert-wwm": "/mnt/dl/public/pretrained_models/chinese-bert-wwm",
+    "hfl/chinese-bert-wwm-ext": "/mnt/dl/public/pretrained_models/chinese-bert-wwm-ext",
+    "hfl/chinese-roberta-wwm-ext": "/mnt/dl/public/pretrained_models/chinese-roberta-wwm-ext",
+    "hfl/chinese-roberta-wwm-ext-large/": "/mnt/dl/public/pretrained_models/chinese-roberta-wwm-ext-large"
 }
 
-
-logging.basicConfig(level=logging.INFO, format="[%(asctime)s %(filename)s %(lineno)d] %(message)s")
-logger = logging.getLogger(__name__)
+nlu_tasks = ["ner", "textclf", "tag", "sentiment"]
+nlg_tasks = ["summary", "translation", "pet"]
 
 
 def get_tokenizer(cfg):
@@ -136,11 +139,11 @@ def get_tokenizer_and_model(cfg, label_map=None, num_labels=None):
                 model = BertForSequenceClassification.from_pretrained(ptd, num_labels=num_labels)
         if cfg["train"]["task_name"] == "tag":
             if cfg["train"]["encode_document"]:
-                # FIXME Process NeZhaForDocumentTagClassification                
+                # FIXME Process NeZhaForDocumentTagClassification
                 # model = NeZhaForDocumentTagClassification(bert_config, cfg["train"]["doc_inner_batch_size"], num_labels=num_labels)
                 pass
             else:
-                # FIXME Process NeZhaForTagClassification    
+                # FIXME Process NeZhaForTagClassification
                 # model = NeZhaForTagClassification(bert_config, num_labels=num_labels)
                 pass
 
@@ -148,18 +151,18 @@ def get_tokenizer_and_model(cfg, label_map=None, num_labels=None):
     elif cfg["train"]["model_name"] == "bart" or cfg["train"]["model_name"] == "mbart":
         from models.tokenization_mbart import MBartTokenizer
         tokenizer = MBartTokenizer.from_pretrained(pretrained_local_mapping[cfg["train"]["pretrained_tag"]])
-        if cfg["train"]["task_name"] == "summary" or cfg["train"]["task_name"] == "translation":
+        if cfg["train"]["task_name"] in nlg_tasks:
             from models.modeling_mbart import MBartForConditionalGeneration
             gradient_checkpointing_flag = True if cfg["train"]["gradient_checkpointing"] else False
             if gradient_checkpointing_flag:
                 logger.info("gradient checkpointing enabled")
             model = MBartForConditionalGeneration.from_pretrained(ptd, gradient_checkpointing=gradient_checkpointing_flag)
-    
+
     # google t5/mt5
     elif cfg["train"]["model_name"] == "t5" or cfg["train"]["model_name"] == "mt5":
         from models.tokenization_t5 import T5Tokenizer
         tokenizer = T5Tokenizer.from_pretrained(ptd)
-        if cfg["train"]["task_name"] == "summary" or cfg["train"]["task_name"] == "translation":
+        if cfg["train"]["task_name"] in nlg_tasks:
             from models.modeling_mt5 import MT5ForConditionalGeneration
             model = MT5ForConditionalGeneration.from_pretrained(ptd)
     else:

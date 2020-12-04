@@ -1,0 +1,48 @@
+train:
+    description: "news classification with pet training"
+    task_name: "pet"
+    model_name: "mt5"
+    pretrained_tag: "google/mt5-base"
+    pretrained_model: "/path/to/the/pretrained/model"
+    batch_size: 8
+    train_epochs: 5.0
+    freeze_encoder: true
+    gradient_checkpointing: true
+    fp16: false
+    output_dir: "/path/to/the/output/dir"  # store wandb logs and trained model files
+pet:
+    pet_pattern:
+        position: "head"
+        placeholder: "<extra_id_0>"
+        prefix: "这是一篇"
+        suffix: "新闻"
+        cloze_index: 4
+        cloze_length: 2
+    candidate_words:
+        - "政治"
+        - "军事"
+        - "经济"
+        - "科技"
+eval:
+    type: "nlg"  # natural language generation
+    batch_size: 4
+    metric: "bleu"  # blue, rouge, both
+    num_beams: 4  # beam search config
+    early_stopping: True
+data:
+    corpus: "corpus_name"
+    data_dir: "/path/to/the/data/dir"
+    num_labels: 4
+    max_src_length: 1024
+    max_tgt_length: 56
+    crosslingual: false
+optimizer:
+    type: "AdamW"
+    lr: 0.0005  # mbart 5e-5; for mt5 model, the recommend lr is 5e-4(0.0005) 
+    weight_decay: 0.0
+    num_warmup_steps: 200
+    gradient_accumulation_steps: 1
+    max_grad_norm: 1.0
+system:
+    cuda_devices: "0"  # if num of devices > 1, using data parallel
+    distributed: false
