@@ -211,11 +211,21 @@ eval:
 准确率、召回率和f1值。
 
 #### 使用方法
-在实体抽取、文本分类(单分类或多分类均可)任务的config.yaml中设定参数：
+在实体抽取、文本分类(单分类)任务的config.yaml中设定参数：
 ```yaml
 eval:
     metric: "p-r-f"
 ```
+
+在文本分类(多分类)任务的config.yaml中设定参数：
+```yaml
+eval:
+    metric: "micro"  # mode 属于 ['micro', 'macro']
+```
+其中
+'micro'为通过计算“正确，错误和否定”的总数来全局计算指标。
+
+'macro'为计算每个种类的p-r-f，并找到其平均值。
 
 #### 返回结果
 返回rouge-1、rouge-2和rouge-l三个评测结果，例如：

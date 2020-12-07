@@ -1,7 +1,7 @@
 train:
-    task_name: "textclf"
-    model_name: "nezha"
-    pretrained_tag: "huawei/nezha-zh-base"
+    task_name: "tag"
+    model_name: "hfl"
+    pretrained_tag: "hfl/chinese-roberta-wwm-ext"
     pretrained_model: "/path/to/the/pretrained/model"
     batch_size: 48
     train_epochs: 5.0
@@ -14,7 +14,7 @@ train:
 eval:
     type: "nlu"  # natural language understanding
     batch_size: 24
-    metric: "micro"
+    metric: "micro"  # This parameter is required for multilabel tag, ['micro', 'macro']
     early_stopping: True
 data:
     corpus: "corpus_name"

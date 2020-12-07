@@ -39,22 +39,38 @@ def eval_wrapper(cfg, pred_list, label_list, label_map):
 
 
     elif cfg["train"]["task_name"] == "textclf":
+        from sklearn.metrics import f1_score, precision_score, recall_score
         all_logits = torch.cat(pred_list, 0)
         all_labels = torch.cat(label_list, 0)
         _, preds = torch.max(all_logits.data, 1)
-        acc = np.mean((preds.byte() == all_labels.byte()).float().numpy())
+        preds, all_labels = preds.int().numpy(), all_labels.int().numpy()
+        avg = cfg["eval"]["metric"] if cfg["eval"]["metric"] == 'micro' else 'macro'
+        eval_precision = precision_score(all_labels, preds, average=avg)
+        eval_recall = recall_score(all_labels, preds, average=avg)
+        eval_f1 = f1_score(all_labels, preds, average=avg)
+
         results = {
-            "eval_precision": acc
+            "eval_precision": eval_precision,
+            "eval_recall": eval_recall,
+            "eval_f1": eval_f1
         }
 
     elif cfg["train"]["task_name"] == "tag":
-        # FIXME change to mulit classification
-        all_logits = torch.cat(pred_list, 0)
-        all_labels = torch.cat(label_list, 0)
-        _, preds = torch.max(all_logits.data, 1)
-        acc = np.mean((preds.byte() == all_labels.byte()).float().numpy())
+        from sklearn.metrics import f1_score, precision_score, recall_score
+        all_logits, all_labels = torch.cat(pred_list, 0), torch.cat(label_list, 0)
+        zero, one = torch.zeros_like(all_logits), torch.ones_like(all_logits)
+        all_logits = torch.where(all_logits>0.5, one, zero).int().numpy()
+        all_labels = all_labels.int().numpy()
+
+        avg = cfg["eval"]["metric"] if cfg["eval"]["metric"] == 'micro' else 'macro'
+        eval_precision = precision_score(all_labels, all_logits, average=avg)
+        eval_recall = recall_score(all_labels, all_logits, average=avg)
+        eval_f1 = f1_score(all_labels, all_logits, average=avg)
+
         results = {
-            "eval_precision": acc
+            "eval_precision": eval_precision,
+            "eval_recall": eval_recall,
+            "eval_f1": eval_f1
         }
 
     elif cfg["train"]["task_name"] == "summary" or cfg["train"]["task_name"] == "translation":
@@ -78,6 +94,28 @@ def eval_wrapper(cfg, pred_list, label_list, label_map):
             "eval_precision": right / total
         }
 
+    return results
+
+def score_bleu(pred_list, label_list):
+    from .summarization_eval import evaluate_bleu
+    avg_score, scores = evaluate_bleu(pred_list, label_list)
+    results = {
+        "bleu_avg_score": avg_score,
+        # FIXME
+        # "bleu_all_score": scores
+    }
+    return results
+
+def score_rouge(pred_list, label_list):
+    from .summarization_eval import evaluate_rouge
+    rouge_1 = evaluate_rouge(pred_list, label_list, n=1, lang="zh")
+    rouge_2 = evaluate_rouge(pred_list, label_list, n=2, lang="zh")
+    rouge_l = evaluate_rouge(pred_list, label_list, n='l', lang="zh")
+    results = {
+        "rouge-1": rouge_1[0],
+        "rouge-2": rouge_2[0],
+        "rouge-L": rouge_l[0]
+    }
     return results
 
 def score_bleu(pred_list, label_list):

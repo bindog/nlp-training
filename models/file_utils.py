@@ -803,7 +803,7 @@ def add_code_sample_docstrings(
         is_tf_class = model_class[:2] == "TF"
         doc_kwargs = dict(model_class=model_class, tokenizer_class=tokenizer_class, checkpoint=checkpoint)
 
-        if "SequenceClassification" in model_class:
+        if "SequenceClassification" in model_class or "TagClassification" in model_class:
             code_sample = TF_SEQUENCE_CLASSIFICATION_SAMPLE if is_tf_class else PT_SEQUENCE_CLASSIFICATION_SAMPLE
         elif "QuestionAnswering" in model_class:
             code_sample = TF_QUESTION_ANSWERING_SAMPLE if is_tf_class else PT_QUESTION_ANSWERING_SAMPLE

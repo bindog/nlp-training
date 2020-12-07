@@ -20,7 +20,7 @@ pretrained_local_mapping = {
     "hfl/chinese-bert-wwm": "/mnt/dl/public/pretrained_models/chinese-bert-wwm",
     "hfl/chinese-bert-wwm-ext": "/mnt/dl/public/pretrained_models/chinese-bert-wwm-ext",
     "hfl/chinese-roberta-wwm-ext": "/mnt/dl/public/pretrained_models/chinese-roberta-wwm-ext",
-    "hfl/chinese-roberta-wwm-ext-large/": "/mnt/dl/public/pretrained_models/chinese-roberta-wwm-ext-large"
+    "hfl/chinese-roberta-wwm-ext-large": "/mnt/dl/public/pretrained_models/chinese-roberta-wwm-ext-large"
 }
 
 nlu_tasks = ["ner", "textclf", "tag", "sentiment"]
@@ -138,14 +138,13 @@ def get_tokenizer_and_model(cfg, label_map=None, num_labels=None):
             else:
                 model = BertForSequenceClassification.from_pretrained(ptd, num_labels=num_labels)
         if cfg["train"]["task_name"] == "tag":
+            from models.modeling_bert import BertForTagClassification
             if cfg["train"]["encode_document"]:
                 # FIXME Process NeZhaForDocumentTagClassification
                 # model = NeZhaForDocumentTagClassification(bert_config, cfg["train"]["doc_inner_batch_size"], num_labels=num_labels)
                 pass
             else:
-                # FIXME Process NeZhaForTagClassification
-                # model = NeZhaForTagClassification(bert_config, num_labels=num_labels)
-                pass
+                model = BertForTagClassification.from_pretrained(ptd, num_labels=num_labels)
 
     # facebook bart/mbart
     elif cfg["train"]["model_name"] == "bart" or cfg["train"]["model_name"] == "mbart":
@@ -157,7 +156,7 @@ def get_tokenizer_and_model(cfg, label_map=None, num_labels=None):
             if gradient_checkpointing_flag:
                 logger.info("gradient checkpointing enabled")
             model = MBartForConditionalGeneration.from_pretrained(ptd, gradient_checkpointing=gradient_checkpointing_flag)
-
+    
     # google t5/mt5
     elif cfg["train"]["model_name"] == "t5" or cfg["train"]["model_name"] == "mt5":
         from models.tokenization_t5 import T5Tokenizer

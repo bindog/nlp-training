@@ -1,16 +1,30 @@
 # Benchmark
 
-## huawei nezha model results on boson test
 
-           precision    recall  f1-score   support
+### 文本摘要
+corup_name | model_name | BLEU | Rouge-1 | Rouge-2 | Rouge-L
+---- | --------  | ---- | ---- | ---- | ----
+xx | xxx | xx | xx | xx| xx
 
-      JOB     0.9164    0.9362    0.9262     19260
-      ORG     0.8808    0.9018    0.8911     38709
-     TIME     0.9613    0.9674    0.9643     39573
-      PER     0.9189    0.9272    0.9230     54212
-      COM     0.8018    0.8319    0.8166      6649
-      LOC     0.9147    0.9252    0.9199     54829
-      PRO     0.8848    0.8921    0.8885     10361
+### 文本翻译
+corup_name | model_name | BLEU | Rouge-1 | Rouge-2 | Rouge-L
+---- | --------  | ---- | ---- | ---- | ----
+TED2013 | facebook/mbart-large-cc25 | 41.4 | - | - | -
 
-micro avg     0.9131    0.9257    0.9194    223593
-macro avg     0.9135    0.9257    0.9196    223593
+### 实体抽取
+corup_name | model_name | precision | recall | f1-score
+---- | --------  | ---- | ---- | ----
+ner | huawei/nezha-en-base | 72.56 | 65.13 | 68.65
+ner | hfl/chinese-roberta-wwm-ext | 65.97 | 64.3 | 65.13
+
+
+### 文本分类（互斥单分类）
+corup_name | model_name | precision | recall | f1-score
+---- | --------  | ---- | ---- | ----
+tag_zh | huawei/nezha-zh-base | 77.31 | 77.31 | 77.31
+
+### 文本标签分类（多分类）
+corup_name | model_name | precision | recall | f1-score
+---- | --------  | ---- | ---- | ----
+RTMACP | huawei/nezha-en-base | 77.81 | 57.09 | 65.86
+RTMACP | hfl/chinese-roberta-wwm-ext | 71.68 | 43.94 | 54.48
