@@ -11,7 +11,7 @@ def eval_wrapper(cfg, pred_list, label_list, label_map):
         y_pred = []
         for logits, label_ids in zip(pred_list, label_list):
             # FIXME ner bilstm
-            if not cfg["train"]["ner_addBilstm"]:
+            if not cfg["train"]["use_bilstm"]:
                 logits = torch.argmax(F.log_softmax(logits, dim=2), dim=2)
             logits = logits.numpy()
             label_ids = label_ids.numpy()

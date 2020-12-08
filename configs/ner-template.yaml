@@ -8,7 +8,7 @@ train:
     freeze_encoder: true
     gradient_checkpointing: true
     fp16: false
-    ner_addBilstm: False  # whether use a model with bilstm added 
+    use_bilstm: False  # whether use a model with bilstm added 
     output_dir: "/path/to/the/output/dir"  # store wandb logs and trained model files
 eval:
     type: "nlu"  # natural language understanding 

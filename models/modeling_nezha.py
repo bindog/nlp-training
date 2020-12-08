@@ -1,16 +1,10 @@
 from __future__ import absolute_import, division, print_function, unicode_literals
 
 import copy
-import json
 import logging
 import math
-import os
-import shutil
-import tarfile
-import tempfile
 import sys
-from io import open
-
+from bidict import bidict
 import numpy as np
 
 import torch
@@ -21,28 +15,31 @@ from .configuration_bert import BertConfig
 from .modeling_bert import (BertIntermediate, BertOutput, BertPooler,
                             BertPreTrainedModel, BertSelfOutput, BertSelfAttention,
                             BertOnlyMLMHead, BertPreTrainingHeads)
+from .modeling_utils import PreTrainedModel
 
-CONFIG_NAME = 'bert_config.json'
-WEIGHTS_NAME = 'pytorch_model.bin'
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s %(filename)s %(lineno)d] %(message)s")
 logger = logging.getLogger(__name__)
 
 
-NEZHA_PRETRAINED_MODEL_ARCHIVE_LIST = [
-    "Noahs-Ark/nezha-base-en",
-    "Noahs-Ark/nezha-base-cn",
-    "Noahs-Ark/nezha-large-cn",
-]
-
-
 class NeZhaConfig(BertConfig):
     """Configuration class to store the configuration of a `NeZhaModel`.
     """
-    def __init__(self, use_relative_position=True, max_relative_position=64, **kwargs):
+    def __init__(
+        self,
+        use_relative_position=True,
+        max_relative_position=64,
+        label_map=None,  # for token cls
+        doc_inner_batch_size=5,  # for document classification
+        bidirectional=True,  # for bilstm and bigru
+        **kwargs
+    ):
         super().__init__(**kwargs)
         self.use_relative_position = use_relative_position
         self.max_relative_position = max_relative_position
+        self.label_map = label_map
+        self.doc_inner_batch_size = doc_inner_batch_size
+        self.bidirectional = bidirectional
 
 
 class NeZhaEmbeddings(nn.Module):
@@ -276,7 +273,31 @@ class NeZhaEncoder(nn.Module):
         return all_encoder_layers, all_encoder_att
 
 
-class NeZhaModel(BertPreTrainedModel):
+class NeZhaPreTrainedModel(PreTrainedModel):
+    """
+    An abstract class to handle weights initialization and a simple interface for downloading and loading pretrained
+    models.
+    """
+
+    config_class = NeZhaConfig
+    # load_tf_weights = load_tf_weights_in_bert
+    base_model_prefix = "nezha"
+    # authorized_missing_keys = [r"position_ids"]
+
+    def _init_weights(self, module):
+        """ Initialize the weights """
+        if isinstance(module, (nn.Linear, nn.Embedding)):
+            # Slightly different from the TF version which uses truncated_normal for initialization
+            # cf https://github.com/pytorch/pytorch/pull/5617
+            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+        elif isinstance(module, nn.LayerNorm):
+            module.bias.data.zero_()
+            module.weight.data.fill_(1.0)
+        if isinstance(module, nn.Linear) and module.bias is not None:
+            module.bias.data.zero_()
+
+
+class NeZhaModel(NeZhaPreTrainedModel):
     def __init__(self, config):
         super(NeZhaModel, self).__init__(config)
         self.embeddings = NeZhaEmbeddings(config)
@@ -310,7 +331,7 @@ class NeZhaModel(BertPreTrainedModel):
         return encoded_layers, pooled_output
 
 
-class NeZhaForPreTraining(BertPreTrainedModel):
+class NeZhaForPreTraining(NeZhaPreTrainedModel):
     """BERT model with pre-training heads.
     This module comprises the BERT model followed by the two pre-training heads:
         - the masked language modeling head, and
@@ -388,7 +409,7 @@ class NeZhaForPreTraining(BertPreTrainedModel):
             return prediction_scores, seq_relationship_score
 
 
-class NeZhaForMaskedLM(BertPreTrainedModel):
+class NeZhaForMaskedLM(NeZhaPreTrainedModel):
     """BERT model with the masked language modeling head.
     This module comprises the BERT model followed by the masked language modeling head.
 
@@ -460,7 +481,7 @@ class NeZhaForMaskedLM(BertPreTrainedModel):
                 return prediction_scores, att_output
 
 
-class NeZhaForSequenceClassification(BertPreTrainedModel):
+class NeZhaForSequenceClassification(NeZhaPreTrainedModel):
     """BERT model for classification.
     This module is composed of the BERT model with a linear layer on top of
     the pooled output.
@@ -506,12 +527,12 @@ class NeZhaForSequenceClassification(BertPreTrainedModel):
     ```
     """
 
-    def __init__(self, config, num_labels):
+    def __init__(self, config):
         super(NeZhaForSequenceClassification, self).__init__(config)
-        self.num_labels = num_labels
+        self.num_labels = config.num_labels
         self.bert = NeZhaModel(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
-        self.classifier = nn.Linear(config.hidden_size, num_labels)
+        self.classifier = nn.Linear(config.hidden_size, self.num_labels)
         self.apply(self._init_weights)
 
     def forward(self, input_ids, token_type_ids=None, attention_mask=None, labels=None):
@@ -527,18 +548,19 @@ class NeZhaForSequenceClassification(BertPreTrainedModel):
             return logits
 
 
-class NeZhaForDocumentClassification(BertPreTrainedModel):
-    def __init__(self, config, doc_inner_batch_size, num_labels, bidirectional=True):
+class NeZhaForDocumentClassification(NeZhaPreTrainedModel):
+    def __init__(self, config):
         super(NeZhaForDocumentClassification, self).__init__(config)
         self.bert = NeZhaModel(config)
-        self.doc_inner_batch_size = doc_inner_batch_size
-        self.num_labels = num_labels
+        self.num_labels = config.num_labels
+        self.doc_inner_batch_size = config.doc_inner_batch_size
+        self.bidirectional = config.bidirectional
         self.dropout = nn.Dropout(p=config.hidden_dropout_prob)
-        self.gru = nn.GRU(config.hidden_size, config.hidden_size, bidirectional=bidirectional)
-        hidden_dimension = config.hidden_size * 2 if bidirectional else config.hidden_size
+        self.gru = nn.GRU(config.hidden_size, config.hidden_size, bidirectional=self.bidirectional)
+        hidden_dimension = config.hidden_size * 2 if self.bidirectional else config.hidden_size
         self.classifier = nn.Sequential(
             nn.Dropout(p=config.hidden_dropout_prob),
-            nn.Linear(hidden_dimension, num_labels),
+            nn.Linear(hidden_dimension, self.num_labels),
         )
 
     def forward(self, document_compose, labels=None):
@@ -598,13 +620,13 @@ class NeZhaForDocumentClassification(BertPreTrainedModel):
                 param.requires_grad = True
 
 
-class NeZhaForTagClassification(BertPreTrainedModel):
-    def __init__(self, config, num_labels):
+class NeZhaForTagClassification(NeZhaPreTrainedModel):
+    def __init__(self, config):
         super(NeZhaForTagClassification, self).__init__(config)
-        self.num_labels = num_labels
+        self.num_labels = config.num_labels
         self.bert = NeZhaModel(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
-        self.classifier = nn.Linear(config.hidden_size, num_labels)
+        self.classifier = nn.Linear(config.hidden_size, self.num_labels)
         self.apply(self._init_weights)
 
     def forward(self, input_ids, token_type_ids=None, attention_mask=None, labels=None):
@@ -631,17 +653,17 @@ class NeZhaForTagClassification(BertPreTrainedModel):
             param.requires_grad = True
 
 
-class NeZhaForDocumentTagClassification(BertPreTrainedModel):
-    def __init__(self, config, doc_inner_batch_size, num_labels):
+class NeZhaForDocumentTagClassification(NeZhaPreTrainedModel):
+    def __init__(self, config):
         super(NeZhaForDocumentTagClassification, self).__init__(config)
         self.bert = NeZhaModel(config)
-        self.doc_inner_batch_size = doc_inner_batch_size
-        self.num_labels = num_labels
+        self.doc_inner_batch_size = config.doc_inner_batch_size
+        self.num_labels = config.num_labels
         self.dropout = nn.Dropout(p=config.hidden_dropout_prob)
         self.lstm = nn.LSTM(config.hidden_size, config.hidden_size)
         self.classifier = nn.Sequential(
             nn.Dropout(p=config.hidden_dropout_prob),
-            nn.Linear(config.hidden_size, num_labels),
+            nn.Linear(config.hidden_size, self.num_labels),
             nn.Tanh()
         )
 
@@ -702,13 +724,13 @@ class NeZhaForDocumentTagClassification(BertPreTrainedModel):
                 param.requires_grad = True
 
 
-class NeZhaForTokenClassification(BertPreTrainedModel):
-    def __init__(self, config, num_labels):
+class NeZhaForTokenClassification(NeZhaPreTrainedModel):
+    def __init__(self, config):
         super(NeZhaForTokenClassification, self).__init__(config)
-        self.num_labels = num_labels
+        self.num_labels = config.num_labels
         self.bert = NeZhaModel(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
-        self.classifier = nn.Linear(config.hidden_size, num_labels)
+        self.classifier = nn.Linear(config.hidden_size, self.num_labels)
         self.apply(self._init_weights)
 
     def forward(self, input_ids, token_type_ids=None, attention_mask=None, labels=None):
@@ -735,7 +757,7 @@ class NeZhaForTokenClassification(BertPreTrainedModel):
             return logits
 
 
-class NeZhaBiLSTMForTokenClassification(BertPreTrainedModel):
+class NeZhaBiLSTMForTokenClassification(NeZhaPreTrainedModel):
 
     """BERT-BiLSTM-CRF model for NER task.
     This module is composed of the NeZhaForTokenClassification model with a BiLSTM layer and a CRF layer on top of
@@ -788,16 +810,16 @@ class NeZhaBiLSTMForTokenClassification(BertPreTrainedModel):
     logits = model(input_ids, segment_ids, input_mask, None)
     ```
     """
-    def __init__(self, config, label_map, num_labels):
+    def __init__(self, config):
         super(NeZhaBiLSTMForTokenClassification, self).__init__(config)
-        self.num_labels = num_labels
-        self.label_map = label_map
+        self.label_map = bidict(config.label_map)
+        self.num_labels = config.num_labels
         self.hidden_size = config.hidden_size
         self.bert = NeZhaModel(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.bilstm = nn.LSTM(bidirectional=True, num_layers=2, input_size=config.hidden_size, hidden_size=config.hidden_size//2, batch_first=True)
         self.classifier = nn.Linear(config.hidden_size, self.num_labels)
-        self.start_label_id = self.label_map.inverse['[CLS]']
+        self.start_label_id = self.label_map.inv['[CLS]']
         self.transitions = nn.Parameter(torch.randn(
             self.num_labels, self.num_labels
         ))
@@ -905,7 +927,7 @@ class NeZhaBiLSTMForTokenClassification(BertPreTrainedModel):
             score, logits = self._viterbi_decode(logits)
             return logits
 
-class NeZhaForMultipleChoice(BertPreTrainedModel):
+class NeZhaForMultipleChoice(NeZhaPreTrainedModel):
     def __init__(self, config, num_choices=2):
         super(NeZhaForMultipleChoice, self).__init__(config)
         self.num_choices = num_choices
@@ -936,7 +958,7 @@ class NeZhaForMultipleChoice(BertPreTrainedModel):
             return reshaped_logits
 
 
-class NeZhaForQuestionAnswering(BertPreTrainedModel):
+class NeZhaForQuestionAnswering(NeZhaPreTrainedModel):
     def __init__(self, config):
         super(NeZhaForQuestionAnswering, self).__init__(config)
         self.bert = NeZhaModel(config)
@@ -972,7 +994,7 @@ class NeZhaForQuestionAnswering(BertPreTrainedModel):
             return start_logits, end_logits
 
 
-class NeZhaForJointLSTM(BertPreTrainedModel):
+class NeZhaForJointLSTM(NeZhaPreTrainedModel):
     def __init__(self, config, num_intent_labels, num_slot_labels):
         super(NeZhaForJointLSTM, self).__init__(config)
         self.num_intent_labels = num_intent_labels

@@ -64,7 +64,7 @@ freeze_encoder | train | Bool | 是否使用freeze_encoder策略
 gradient_checkpointing | train | Bool | 是否使用gradient_checkpointing策略
 fp16 | train | Bool | 是否使用fp16策略
 encode_document | train | Bool | 是否使用encode_document策略
-ner_addBilstm | train | Bool | 是否使用带有addBilstm的预训练模型(仅在实体识别任务中存在)
+use_bilstm | train | Bool | 是否使用带有addBilstm的预训练模型(仅在实体识别任务中存在)
 output_dir | train | String | 输出文件及训练参数保存路径
  |  |  | 
 type | eval | String | 任务类型，nlu为序列标注任务，nlg为序列生成任务
