@@ -11,13 +11,11 @@ import numpy as np
 from bidict import bidict
 import torch
 import torch.nn.functional as F
-from tools import official_tokenization as tokenization, utils
 from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
                               TensorDataset)
 
 from models.modeling_nezha import (NeZhaForSequenceClassification, NeZhaForTokenClassification, NeZhaForTagClassification,
-                                   NeZhaForDocumentClassification, NeZhaForDocumentTagClassification,
-                                   NeZhaConfig, WEIGHTS_NAME, CONFIG_NAME)
+                                   NeZhaForDocumentClassification, NeZhaForDocumentTagClassification)
 
 
 from datasets.textclf import encode_single_document
@@ -53,8 +51,7 @@ class TextclfInferenceService(object):
             label_map = json.loads(f.read().strip())
             self.label_map = {int(k):v for k, v in label_map.items()}
         num_labels = len(self.label_map)
-        self.tokenizer = tokenization.BertTokenizer(vocab_file=os.path.join(model_dir, 'vocab.txt'), do_lower_case=True)
-        config = NeZhaConfig().from_json_file(os.path.join(model_dir, 'bert_config.json'))
+        self.tokenizer = BertTokenizer.from_pretrained(model_dir)
 
         self.encode_document = encode_document
         self.tag = tag
@@ -62,17 +59,16 @@ class TextclfInferenceService(object):
         if encode_document:
             self.doc_inner_batch_size = doc_inner_batch_size
             if self.tag:
-                self.model = NeZhaForDocumentTagClassification(config, doc_inner_batch_size, num_labels)
+                self.model = NeZhaForDocumentTagClassification.from_pretrained(model_dir, doc_inner_batch_size=doc_inner_batch_size, num_labels=num_labels)
             else:
-                self.model = NeZhaForDocumentClassification(config, doc_inner_batch_size, num_labels)
+                self.model = NeZhaForDocumentClassification.from_pretrained(model_dir, doc_inner_batch_size=doc_inner_batch_size, num_labels=num_labels)
         else:
             if self.tag:
-                self.model = NeZhaForTagClassification(config, num_labels=num_labels)
+                self.model = NeZhaForTagClassification.from_pretrained(model_dir, num_labels=num_labels)
             else:
-                self.model = NeZhaForSequenceClassification(config, num_labels=num_labels)
-        self.model.load_state_dict(torch.load(os.path.join(model_dir, WEIGHTS_NAME)))
-        self.model.cuda()
+                self.model = NeZhaForSequenceClassification.from_pretrained(model_dir, num_labels=num_labels)
         self.model.eval()
+        self.model.cuda()
 
     def get_label_map(self):
         return self.label_map
@@ -143,12 +139,10 @@ class NERInferenceService(object):
             "TIME": "时间",
             "COM": "公司"
         }
-        self.tokenizer = tokenization.BertTokenizer(vocab_file=os.path.join(model_dir, 'vocab.txt'), do_lower_case=True)
-        config = BertConfig(os.path.join(model_dir, 'bert_config.json'))
-        self.model = NeZhaForTokenClassification(config, num_labels=num_labels)
-        self.model.load_state_dict(torch.load(os.path.join(model_dir, WEIGHTS_NAME)))
-        self.model.cuda()
+        self.tokenizer = BertTokenizer.from_pretrained(model_dir)
+        self.model = NeZhaForTokenClassification.from_pretrained(model_dir, num_labels=num_labels)
         self.model.eval()
+        self.model.cuda()
 
     def input_preprocess(self, text, max_seq_length=128):
         if len(text) > max_seq_length:

@@ -3,7 +3,6 @@ import shutil
 import torch
 import pathlib
 import logging
-from tools import official_tokenization as tokenization, utils
 
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s %(filename)s %(lineno)d] %(message)s")
@@ -29,8 +28,9 @@ nlg_tasks = ["summary", "translation", "pet"]
 
 def get_tokenizer(cfg):
     if cfg["train"]["model_name"] == "nezha":
+        from models.tokenization_bert import BertTokenizer
         if cfg["train"]["pretrained_model"]:
-            tokenizer = tokenization.BertTokenizer(vocab_file=os.path.join(cfg["train"]["pretrained_model"], "vocab.txt"), do_lower_case=True)
+            tokenizer = BertTokenizer.from_pretrained(cfg["train"]["pretrained_model"])
         else:
             logger.error("BERT vocab file not set, please check your ber_model_dir or trained_model_dir")
         logger.info('vocab size is %d' % (len(tokenizer.vocab)))
@@ -88,8 +88,7 @@ def get_tokenizer_and_model(cfg, label_map=None, num_labels=None):
                             NeZhaBiLSTMForTokenClassification, NeZhaForDocumentClassification,
                             NeZhaForDocumentTagClassification, NeZhaForTagClassification
                         )
-        if ptd:
-            tokenizer = BertTokenizer.from_pretrained(ptd)
+        tokenizer = BertTokenizer.from_pretrained(ptd)
 
         if cfg["train"]["task_name"] == "ner":
             if cfg["train"]["use_bilstm"]:
@@ -111,7 +110,7 @@ def get_tokenizer_and_model(cfg, label_map=None, num_labels=None):
     # facebook bert and XunFei hfl
     elif cfg["train"]["model_name"] == "bert" or cfg["train"]["model_name"] == "hfl":
         from models.tokenization_bert import BertTokenizer
-        tokenizer = BertTokenizer.from_pretrained(pretrained_local_mapping[cfg["train"]["pretrained_tag"]])
+        tokenizer = BertTokenizer.from_pretrained(ptd)
         if cfg["train"]["task_name"] == "ner":
             from models.modeling_bert import BertForTokenClassification
             if cfg["train"]["use_bilstm"]:
@@ -140,7 +139,7 @@ def get_tokenizer_and_model(cfg, label_map=None, num_labels=None):
     # facebook bart/mbart
     elif cfg["train"]["model_name"] == "bart" or cfg["train"]["model_name"] == "mbart":
         from models.tokenization_mbart import MBartTokenizer
-        tokenizer = MBartTokenizer.from_pretrained(pretrained_local_mapping[cfg["train"]["pretrained_tag"]])
+        tokenizer = MBartTokenizer.from_pretrained(ptd)
         if cfg["train"]["task_name"] in nlg_tasks:
             from models.modeling_mbart import MBartForConditionalGeneration
             gradient_checkpointing_flag = True if cfg["train"]["gradient_checkpointing"] else False
