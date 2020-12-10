@@ -12,17 +12,16 @@ import csv
 import json
 import time
 import logging
-import wandb
+from packaging import version
+from tqdm import tqdm, trange
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s %(filename)s %(lineno)d] %(message)s")
 logger = logging.getLogger(__name__)
 
-from packaging import version
-import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
-import torch.nn.functional as F
-from tqdm import tqdm, trange
+import wandb
+import numpy as np
 
 from utils.config_utils import parse_cfg
 from utils.data_utils import get_label_map, get_dataloader
@@ -137,7 +136,8 @@ def eval_loop(cfg, tokenizer, model, eval_dataloader, label_map, debug=False):
         # natural language generation, using generate and beam search
         elif cfg["eval"]["type"] == "nlg":
             input_ids = inputs["input_ids"].cuda()
-            pred_ids = model.generate(
+            _model = model.module if hasattr(model, 'module') else model  # handle multi gpu
+            pred_ids = _model.generate(
                                     input_ids,
                                     num_beams=cfg["eval"]["num_beams"],
                                     max_length=cfg["data"]["max_tgt_length"],
@@ -187,6 +187,22 @@ def main():
     args = parser.parse_args()
     cfg = parse_cfg(pathlib.Path(args.config))
 
+    # set CUDA_VISIBLE_DEVICES and get num_gpus
+    if args.local_rank == -1:  # not distributed
+        os.environ["CUDA_VISIBLE_DEVICES"] = cfg["system"]["cuda_visible_devices"]
+        num_gpus = torch.cuda.device_count()
+        args.distributed = False
+    else:  # distributed
+        torch.cuda.set_device(args.local_rank)
+        num_gpus = 1
+        args.distributed = True
+        # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
+        torch.distributed.init_process_group(backend='nccl', init_method='env://')
+        args.world_size = torch.distributed.get_world_size()
+    logger.info("num_gpus: {}, distributed training: {}, 16-bits training: {}".format(
+        num_gpus, bool(args.local_rank != -1), cfg["train"]["fp16"]))
+    cudnn.benchmark = True
+
     cfg["train"]["output_dir"] = cfg["train"]["output_dir"] + "/" + \
                                  cfg["train"]["task_name"] + "_" + \
                                  cfg["train"]["model_name"] + "_" + \
@@ -194,7 +210,7 @@ def main():
 
     output_dir_pl = pathlib.Path(cfg["train"]["output_dir"])
     if output_dir_pl.exists():
-        logger.warn("output directory ({}) already exists!".format(output_dir_pl))
+        logger.warn("output directory ({}) already exists, continue after 2 seconds...".format(output_dir_pl))
         time.sleep(2)
     else:
         output_dir_pl.mkdir(parents=True, exist_ok=True)
@@ -205,22 +221,6 @@ def main():
         wandb.run.name = cfg["data"]["corpus"] + '-' + cfg["train"]["pretrained_tag"] + '-' + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         wandb.config.update(args)
         wandb.run.save()
-
-    if args.local_rank == -1:
-        num_gpus = torch.cuda.device_count()
-        args.distributed = False
-        # TODO multi gpus
-        torch.cuda.set_device(int(cfg["system"]["cuda_devices"]))
-    else:
-        torch.cuda.set_device(args.local_rank)
-        num_gpus = 1
-        args.distributed = True
-        # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
-        torch.distributed.init_process_group(backend='nccl', init_method='env://')
-        args.world_size = torch.distributed.get_world_size()
-    logger.info("num_gpus: {}, distributed training: {}, 16-bits training: {}".format(
-        num_gpus, bool(args.local_rank != -1), cfg["train"]["fp16"]))
-    cudnn.benchmark = True
 
     if cfg["optimizer"]["gradient_accumulation_steps"] < 1:
         raise ValueError("Invalid gradient_accumulation_steps parameter: {}, should be >= 1".format(cfg["optimizer"]["gradient_accumulation_steps"]))
@@ -264,12 +264,11 @@ def main():
         exit()
 
     if cfg["system"]["distributed"]:
-        # TODO needs fix here
+        # TODO distributed debug
         model.cuda(args.local_rank)
         from torch.nn.parallel import DistributedDataParallel as DDP
         model = DDP(model, device_ids=[args.local_rank])
     elif num_gpus > 1:
-        # TODO add devices id here
         model = torch.nn.DataParallel(model)
 
     # Train
@@ -294,7 +293,7 @@ def main():
     # Test Eval
     if args.local_rank == -1 or torch.distributed.get_rank() == 0:
         logger.info("running evaluation on final test set")
-        # TODO new test set?
+        # TODO add stand alone test set
         _, eval_dataloader = get_dataloader(cfg, tokenizer, num_labels, "dev", debug=args.debug)
         score = eval_loop(cfg, tokenizer, model, eval_dataloader, label_map, args.debug)
 

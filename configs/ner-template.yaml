@@ -1,4 +1,5 @@
 train:
+    description: "msra ner data with nezha model"
     task_name: "ner"
     model_name: "hfl"
     pretrained_tag: "hfl/chinese-roberta-wwm-ext"
@@ -30,5 +31,5 @@ optimizer:
     gradient_accumulation_steps: 1
     max_grad_norm: 1.0
 system:
-    cuda_devices: "0"  # if num of devices > 1, using data parallel
+    cuda_visible_devices: "0"  # if num of devices > 1, using data parallel
     distributed: false

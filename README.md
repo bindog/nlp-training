@@ -86,7 +86,7 @@ num_warmup_steps | optimizer | Float | warmup策略持续执行steps
 gradient_accumulation_steps | optimizer | Float | 梯度累计steps
 max_grad_norm | optimizer | Float | 梯度修剪参数
  |  |  | 
-cuda_devices | system | String | 使用几块gpu训练模型
+cuda_visible_devices | system | String | 使用几块gpu训练模型
 distributed | system | Bool | 是否分布式加载数据
 
 

@@ -177,4 +177,5 @@ def save_model(cfg, tokenizer, model, best=False, epoch=None, step=None):
 
     saved_path = os.path.join(cfg["train"]["output_dir"], sub_dir)
     tokenizer.save_pretrained(saved_path)
-    model.save_pretrained(saved_path)
+    _model = model.module if hasattr(model, 'module') else model  # handle multi gpu
+    _model.save_pretrained(saved_path)
