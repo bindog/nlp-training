@@ -40,6 +40,7 @@ class NeZhaConfig(BertConfig):
         self.label_map = label_map
         self.doc_inner_batch_size = doc_inner_batch_size
         self.bidirectional = bidirectional
+        self.use_gpu = torch.cuda.is_available()
 
 
 class NeZhaEmbeddings(nn.Module):
@@ -131,12 +132,15 @@ class NeZhaSelfAttention(nn.Module):
         self.num_attention_heads = config.num_attention_heads
         self.attention_head_size = int(config.hidden_size / config.num_attention_heads)
         self.all_head_size = self.num_attention_heads * self.attention_head_size
+        self.use_gpu = config.use_gpu
 
         self.query = nn.Linear(config.hidden_size, self.all_head_size)
         self.key = nn.Linear(config.hidden_size, self.all_head_size)
         self.value = nn.Linear(config.hidden_size, self.all_head_size)
         self.relative_positions_embeddings = _generate_relative_positions_embeddings(
-            length=512, depth=self.attention_head_size, max_relative_position=config.max_relative_position).cuda()
+            length=512, depth=self.attention_head_size, max_relative_position=config.max_relative_position)
+        if self.use_gpu:
+            self.relative_positions_embeddings = self.relative_positions_embeddings.cuda()
         self.dropout = nn.Dropout(config.attention_probs_dropout_prob)
 
     def transpose_for_scores(self, x):
@@ -555,6 +559,7 @@ class NeZhaForDocumentClassification(NeZhaPreTrainedModel):
         self.num_labels = config.num_labels
         self.doc_inner_batch_size = config.doc_inner_batch_size
         self.bidirectional = config.bidirectional
+        self.use_gpu = config.use_gpu
         self.dropout = nn.Dropout(p=config.hidden_dropout_prob)
         self.gru = nn.GRU(config.hidden_size, config.hidden_size, bidirectional=self.bidirectional)
         hidden_dimension = config.hidden_size * 2 if self.bidirectional else config.hidden_size
@@ -578,7 +583,9 @@ class NeZhaForDocumentClassification(NeZhaPreTrainedModel):
                                     self.doc_inner_batch_size,
                                     self.bert.config.hidden_size
                                 ),
-                                dtype=torch.float).cuda()
+                                dtype=torch.float)
+        if self.use_gpu:
+            bert_output = bert_output.cuda()
 
         # only pass through doc_inner_batch_size numbers of inputs into bert.
         # this means that we are possibly cutting off the last part of documents.
@@ -659,6 +666,7 @@ class NeZhaForDocumentTagClassification(NeZhaPreTrainedModel):
         self.bert = NeZhaModel(config)
         self.doc_inner_batch_size = config.doc_inner_batch_size
         self.num_labels = config.num_labels
+        self.use_gpu = config.use_gpu
         self.dropout = nn.Dropout(p=config.hidden_dropout_prob)
         self.lstm = nn.LSTM(config.hidden_size, config.hidden_size)
         self.classifier = nn.Sequential(
@@ -682,7 +690,9 @@ class NeZhaForDocumentTagClassification(NeZhaPreTrainedModel):
                                     self.doc_inner_batch_size,
                                     self.bert.config.hidden_size
                                 ),
-                                dtype=torch.float).cuda()
+                                dtype=torch.float)
+        if self.use_gpu:
+            bert_output = bert_output.cuda()
 
         # only pass through doc_inner_batch_size numbers of inputs into bert.
         # this means that we are possibly cutting off the last part of documents.
@@ -815,6 +825,7 @@ class NeZhaBiLSTMForTokenClassification(NeZhaPreTrainedModel):
         self.label_map = bidict(config.label_map)
         self.num_labels = config.num_labels
         self.hidden_size = config.hidden_size
+        self.use_gpu = config.use_gpu
         self.bert = NeZhaModel(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.bilstm = nn.LSTM(bidirectional=True, num_layers=2, input_size=config.hidden_size, hidden_size=config.hidden_size//2, batch_first=True)
@@ -836,7 +847,9 @@ class NeZhaBiLSTMForTokenClassification(NeZhaPreTrainedModel):
 
         # batch_transitions=self.transitions.expand(batch_size,self.num_labels,self.num_labels)
 
-        log_delta = torch.Tensor(batch_size, 1, self.num_labels).fill_(-10000.).cuda()
+        log_delta = torch.Tensor(batch_size, 1, self.num_labels).fill_(-10000.)
+        if self.use_gpu:
+            log_delta = log_delta.cuda()
         log_delta[:, 0, self.start_label_id] = 0.
 
         # psi is for the vaule of the last latent that make P(this_latent) maximum.
@@ -875,7 +888,9 @@ class NeZhaBiLSTMForTokenClassification(NeZhaPreTrainedModel):
         batch_size = feats.shape[0]
 
         # alpha_recursion,forward, alpha(zt)=p(zt,bar_x_1:t)
-        log_alpha = torch.Tensor(batch_size, 1, self.num_labels).fill_(-10000.).cuda()  #[batch_size, 1, 16]
+        log_alpha = torch.Tensor(batch_size, 1, self.num_labels).fill_(-10000.)  #[batch_size, 1, 16]
+        if self.use_gpu:
+            log_alpha = log_alpha.cuda()
         # normal_alpha_0 : alpha[0]=Ot[0]*self.PIs
         # self.start_label has all of the score. it is log,0 is p=1
         log_alpha[:, 0, self.start_label_id] = 0
@@ -896,7 +911,9 @@ class NeZhaBiLSTMForTokenClassification(NeZhaPreTrainedModel):
         batch_transitions = self.transitions.expand(batch_size,self.num_labels,self.num_labels)
         batch_transitions = batch_transitions.flatten(1)
 
-        score = torch.zeros((feats.shape[0],1)).cuda()
+        score = torch.zeros((feats.shape[0],1))
+        if self.use_gpu:
+            score = score.cuda()
         # the 0th node is start_label->start_word,the probability of them=1. so t begin with 1.
         for t in range(1, T):
             score = score + \
