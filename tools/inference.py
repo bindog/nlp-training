@@ -14,6 +14,7 @@ import torch.nn.functional as F
 from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
                               TensorDataset)
 
+from models.tokenization_bert import BertTokenizer
 from models.modeling_nezha import (NeZhaForSequenceClassification, NeZhaForTokenClassification, NeZhaForTagClassification,
                                    NeZhaForDocumentClassification, NeZhaForDocumentTagClassification)
 
