@@ -1158,6 +1158,9 @@ class T5ForConditionalGeneration(T5PreTrainedModel):
     def get_output_embeddings(self):
         return self.lm_head
 
+    def set_output_embeddings(self, new_embeddings):
+        self.lm_head = new_embeddings
+
     def get_encoder(self):
         return self.encoder
 

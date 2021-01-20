@@ -6,9 +6,6 @@ import json
 import logging
 import argparse
 from torch import nn
-# from transformers import AutoTokenizer
-# from transformers import AutoModel
-# from transformers import TFAutoModel
 
 from models.tokenization_t5 import T5Tokenizer
 from models.modeling_mt5 import MT5ForConditionalGeneration
@@ -29,7 +26,7 @@ def select_embeddings(model, old_vocab, new_vocab, model_type="mt5", model_name=
         if old_num_tokens != len(old_vocab) + 12:  # NOTE: unknow bugs, why mt5 has 12 more embeddings than vocab size
             logging.info('len(old_vocab) != len(model.old_embeddings)')
             return old_embeddings
-    else model_type == "mbart":
+    else:
         if old_num_tokens != len(old_vocab):
             logging.info('len(old_vocab) != len(model.old_embeddings)')
             return old_embeddings
@@ -44,7 +41,8 @@ def select_embeddings(model, old_vocab, new_vocab, model_type="mt5", model_name=
     new_embeddings = nn.Embedding(new_num_tokens, old_embedding_dim)
     new_embeddings.to(old_embeddings.weight.device)
 
-    # Copy weights
+    # Copy weights input embeddings
+    logging.info("reducing input embeddings ...")
     i = 0
     j = 0
     vocab = []
@@ -57,11 +55,30 @@ def select_embeddings(model, old_vocab, new_vocab, model_type="mt5", model_name=
 
     model.set_input_embeddings(new_embeddings)
 
+    # Copy weights output embeddings if exists
+    old_lm_head = model.get_output_embeddings()
+    if old_lm_head is not None:
+        if old_lm_head.out_features > new_num_tokens:
+            logging.info("reducing output embeddings ...")
+            new_lm_head = nn.Linear(model.config.d_model, new_num_tokens, bias=False)
+            new_lm_head.to(old_lm_head.weight.device)
+            # Copy weights output embeddings
+            i = 0
+            j = 0
+            for token in old_vocab:
+                if token in new_vocab:
+                    new_lm_head.weight.data[i, :] = old_lm_head.weight.data[j, :]
+                    i += 1
+                j += 1
+            model.set_output_embeddings(new_lm_head)
+
     # Update base model and current model config
     model.config.vocab_size = new_num_tokens
     model.vocab_size = new_num_tokens
 
     # Tie weights
+    # NOTE: only has effect when model.config.tie_word_embeddings and
+    # model.config.tie_encoder_decoder is true
     model.tie_weights()
 
     # Save new model
