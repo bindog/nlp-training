@@ -83,7 +83,7 @@ def get_dataloader(cfg, tokenizer, num_labels, split, debug=False):
         dataset = SummarizationDataset(json_file, tokenizer, max_source_length=cfg["data"]["max_src_length"], max_target_length=cfg["data"]["max_tgt_length"])
     elif cfg["train"]["task_name"] == "translation":
         from datasets.translation import TranslationDataset
-        dataset = TranslationDataset(json_file, tokenizer)
+        dataset = TranslationDataset(json_file, tokenizer, max_source_length=cfg["data"]["max_src_length"], max_target_length=cfg["data"]["max_tgt_length"])
     elif cfg["train"]["task_name"] == "pet":
         from datasets.pet import PetDataset
         label_map, num_labels = get_label_map(cfg)

@@ -46,7 +46,7 @@ else:
     from torch.cuda.amp import autocast
 
 
-def train_loop(cfg, model, train_dataloader, optimizer, lr_scheduler, num_gpus, epoch, scaler=None, debug=False):
+def train_loop(cfg, model, train_dataloader, optimizer, lr_scheduler, num_gpus, epoch, scaler=None, debug=False, use_wandb=False):
     model.train()
     p = tqdm(train_dataloader, desc="Iteration")
     for step, batch in enumerate(p):
@@ -101,7 +101,7 @@ def train_loop(cfg, model, train_dataloader, optimizer, lr_scheduler, num_gpus, 
             # model.zero_grad()
             optimizer.zero_grad()
 
-            if step % 10 == 0 and step > 0 and not debug:
+            if step % 10 == 0 and step > 0 and not debug and use_wandb:
                 p.set_postfix(loss=round(loss.item(), 4))
                 wandb.log({"epoch": epoch, "step": step, "train_loss": loss.item(),
                            "lr": lr_scheduler.get_last_lr()[0]})
@@ -109,7 +109,7 @@ def train_loop(cfg, model, train_dataloader, optimizer, lr_scheduler, num_gpus, 
             break
 
 
-def eval_loop(cfg, tokenizer, model, eval_dataloader, label_map, debug=False):
+def eval_loop(cfg, tokenizer, model, eval_dataloader, label_map, debug=False, use_wandb=False):
     model.eval()
     pred_list = []
     label_list = []
@@ -141,6 +141,8 @@ def eval_loop(cfg, tokenizer, model, eval_dataloader, label_map, debug=False):
                                     input_ids,
                                     num_beams=cfg["eval"]["num_beams"],
                                     max_length=cfg["data"]["max_tgt_length"],
+                                    # TODO length penalty for summarization?
+                                    length_penalty=cfg["eval"]["length_penalty"],
                                     early_stopping=cfg["eval"]["early_stopping"]
                                 )
             pred_text = [tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in pred_ids]
@@ -159,7 +161,7 @@ def eval_loop(cfg, tokenizer, model, eval_dataloader, label_map, debug=False):
     logger.info("Result of evaluation metric: " + cfg["eval"]["metric"])
     for k, v in results.items():
         logger.info(k + ": " + str(v))
-    if not debug:
+    if not debug and use_wandb:
         wandb.log({"examples": table, "score_results": results})
 
     key_imp = list(results.keys())[0]
@@ -184,6 +186,9 @@ def main():
     parser.add_argument("--debug",
                         action="store_true",
                         help="in debug mode, will not enable wandb log")
+    parser.add_argument("--use_wandb",
+                        action="store_true",
+                        help="whether or not use wandb")
     args = parser.parse_args()
     cfg = parse_cfg(pathlib.Path(args.config))
 
@@ -215,7 +220,7 @@ def main():
     else:
         output_dir_pl.mkdir(parents=True, exist_ok=True)
 
-    if not args.debug:
+    if not args.debug and args.use_wandb:
         config_dictionary = dict(yaml=cfg, params=args)
         wandb.init(config=config_dictionary, project="nlp-task", dir=cfg["train"]["output_dir"])
         wandb.run.name = cfg["data"]["corpus"] + '-' + cfg["train"]["pretrained_tag"] + '-' + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
@@ -234,7 +239,7 @@ def main():
     tokenizer, model = get_tokenizer_and_model(cfg, label_map, num_labels)
 
     # check model details on wandb
-    if not args.debug:
+    if not args.debug and args.use_wandb:
         wandb.watch(model)
 
     num_examples, train_dataloader = get_dataloader(cfg, tokenizer, num_labels, "train", debug=args.debug)
@@ -278,10 +283,10 @@ def main():
     for _ in trange(int(cfg["train"]["train_epochs"]), desc="Epoch"):
         best = False
         # train loop in one epoch
-        train_loop(cfg, model, train_dataloader, optimizer, lr_scheduler, num_gpus, epoch, scaler, args.debug)
+        train_loop(cfg, model, train_dataloader, optimizer, lr_scheduler, num_gpus, epoch, scaler, args.debug, args.use_wandb)
         # begin to evaluate
         logger.info("running evaluation on dev set")
-        score = eval_loop(cfg, tokenizer, model, eval_dataloader, label_map, args.debug)
+        score = eval_loop(cfg, tokenizer, model, eval_dataloader, label_map, args.debug, args.use_wandb)
         if best_score < score:
             best_score = score
             best = True
@@ -295,7 +300,7 @@ def main():
         logger.info("running evaluation on final test set")
         # TODO add stand alone test set
         _, eval_dataloader = get_dataloader(cfg, tokenizer, num_labels, "dev", debug=args.debug)
-        score = eval_loop(cfg, tokenizer, model, eval_dataloader, label_map, args.debug)
+        score = eval_loop(cfg, tokenizer, model, eval_dataloader, label_map, args.debug, args.use_wandb)
 
 
 if __name__ == "__main__":
