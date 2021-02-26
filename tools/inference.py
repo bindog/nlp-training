@@ -7,7 +7,6 @@ import time
 import json
 import datetime
 import shutil
-import numpy as np
 from bidict import bidict
 import torch
 import torch.nn.functional as F
