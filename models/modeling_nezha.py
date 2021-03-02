@@ -164,15 +164,14 @@ class NeZhaSelfAttention(nn.Module):
         attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
         batch_size, num_attention_heads, from_seq_length, to_seq_length = attention_scores.size()
 
-        relations_keys = self.relative_positions_embeddings.detach().clone()[:to_seq_length, :to_seq_length, :].to(
-            device)
+        relations_keys = self.relative_positions_embeddings.detach().clone()[:to_seq_length, :to_seq_length, :].to(device)
         # relations_keys = embeddings.clone().detach().to(device)
         query_layer_t = query_layer.permute(2, 0, 1, 3)
-        query_layer_r = query_layer_t.contiguous().view(from_seq_length, batch_size * num_attention_heads,
-                                                        self.attention_head_size)
+        query_layer_r = query_layer_t.contiguous().view(from_seq_length, batch_size * num_attention_heads, self.attention_head_size)
+        # add suppport for fp16
+        relations_keys = relations_keys.half() if query_layer_r.dtype == torch.float16 else relations_keys
         key_position_scores = torch.matmul(query_layer_r, relations_keys.permute(0, 2, 1))
-        key_position_scores_r = key_position_scores.view(from_seq_length, batch_size,
-                                                         num_attention_heads, from_seq_length)
+        key_position_scores_r = key_position_scores.view(from_seq_length, batch_size, num_attention_heads, from_seq_length)
         key_position_scores_r_t = key_position_scores_r.permute(1, 2, 0, 3)
         attention_scores = attention_scores + key_position_scores_r_t
         attention_scores = attention_scores / math.sqrt(self.attention_head_size)
@@ -188,14 +187,13 @@ class NeZhaSelfAttention(nn.Module):
 
         context_layer = torch.matmul(attention_probs, value_layer)
 
-        relations_values = self.relative_positions_embeddings.clone()[:to_seq_length, :to_seq_length, :].to(
-            device)
+        relations_values = self.relative_positions_embeddings.clone()[:to_seq_length, :to_seq_length, :].to(device)
         attention_probs_t = attention_probs.permute(2, 0, 1, 3)
-        attentions_probs_r = attention_probs_t.contiguous().view(from_seq_length, batch_size * num_attention_heads,
-                                                                 to_seq_length)
+        attentions_probs_r = attention_probs_t.contiguous().view(from_seq_length, batch_size * num_attention_heads, to_seq_length)
+        # add suppport for fp16
+        relations_values = relations_values.half() if attentions_probs_r.dtype == torch.float16 else relations_values
         value_position_scores = torch.matmul(attentions_probs_r, relations_values)
-        value_position_scores_r = value_position_scores.view(from_seq_length, batch_size,
-                                                             num_attention_heads, self.attention_head_size)
+        value_position_scores_r = value_position_scores.view(from_seq_length, batch_size, num_attention_heads, self.attention_head_size)
         value_position_scores_r_t = value_position_scores_r.permute(1, 2, 0, 3)
         context_layer = context_layer + value_position_scores_r_t
 
@@ -583,7 +581,7 @@ class NeZhaForDocumentClassification(NeZhaPreTrainedModel):
                                     self.doc_inner_batch_size,
                                     self.bert.config.hidden_size
                                 ),
-                                dtype=torch.float)
+                                dtype=next(self.gru.parameters()).dtype)
         if self.use_gpu:
             bert_output = bert_output.cuda()
 
@@ -690,7 +688,7 @@ class NeZhaForDocumentTagClassification(NeZhaPreTrainedModel):
                                     self.doc_inner_batch_size,
                                     self.bert.config.hidden_size
                                 ),
-                                dtype=torch.float)
+                                dtype=next(self.gru.parameters()).dtype)
         if self.use_gpu:
             bert_output = bert_output.cuda()
 
