@@ -14,6 +14,7 @@ from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
                               TensorDataset)
 
 from models.tokenization_bert import BertTokenizer
+from models.modeling_bert import BertForSequenceClassification
 from models.modeling_nezha import (NeZhaForSequenceClassification, NeZhaForTokenClassification, NeZhaForTagClassification,
                                    NeZhaForDocumentClassification, NeZhaForDocumentTagClassification)
 
@@ -30,19 +31,73 @@ class SummarizationInferenceService(object):
         from models.modeling_mbart import MBartForConditionalGeneration
         self.model = MBartForConditionalGeneration.from_pretrained(model_dir)
         self.tokenizer = MBartTokenizer.from_pretrained(model_dir)
-        self.model.cuda()
         self.model.eval()
+        self.model.cuda()
+        self.model.half()
 
     def input_preprocess(self):
         pass
 
-    def inference(self, text):
-        inputs = self.tokenizer([text], max_length=1024, return_tensors='pt')
+    def inference(self, text, batch=False):
+        inputs = self.tokenizer(text, padding="max_length", max_length=1024, truncation=True, return_tensors='pt')
+        outputs = self.model.generate(
+                                inputs.input_ids.cuda(),
+                                num_beams=4,
+                                max_length=50,
+                                early_stopping=True
+                            )
+        results = []
+        for output in outputs:
+            summary_text = self.tokenizer.decode(
+                                        output,
+                                        skip_special_tokens=True,
+                                        clean_up_tokenization_spaces=False
+                                    )
+            results.append(summary_text)
+            print("debug summary:", summary_text)
+        if not batch:
+            return results[0]
+        else:
+            return results
+
+class BertTextclfInferenceService(object):
+    def __init__(self, model_dir, **kwargs):
+        with open(os.path.join(model_dir, "label_map")) as f:
+            label_map = json.loads(f.read().strip())
+            self.label_map = {int(k):v for k, v in label_map.items()}
+        num_labels = len(self.label_map)
+        self.tokenizer = BertTokenizer.from_pretrained(model_dir)
+
+        self.model = BertForSequenceClassification.from_pretrained(model_dir, num_labels=num_labels)
+        self.model.eval()
+        self.model.cuda()
+        self.model.half()
+
+    def get_label_map(self):
+        return self.label_map
+
+    def input_preprocess(self, text_list, max_seq_length=128):
+        inputs_dict = self.tokenizer(text_list, padding="max_length", max_length=128, truncation=True, return_tensors="pt")
+        return inputs_dict
+
+    def parse_label(self, preds, batch=False):
+        r = []
+        for p in preds:
+            r.append(self.label_map[p])
+        if not batch:
+            return r[0]
+        else:
+            return r
+
+    def inference(self, text, batch=False):
+        # batch inference
+        inputs_dict = self.input_preprocess(text)
         with torch.no_grad():
-            summary_ids = self.model.generate(inputs.input_ids.cuda(), num_beams=4, max_length=50, early_stopping=True)
-            summary_text = [self.tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=False) for g in summary_ids]
-        print("debug summary:", summary_text)
-        return "".join(summary_text)
+            _inputs = {k: t.cuda() for k, t in inputs_dict.items()}
+            outputs = self.model(**_inputs)
+            _, preds = torch.max(outputs["logits"].float().detach().cpu(), 1)
+            preds = preds.byte().numpy().tolist()
+            return self.parse_label(preds, batch)
 
 
 class TextclfInferenceService(object):
@@ -69,6 +124,7 @@ class TextclfInferenceService(object):
                 self.model = NeZhaForSequenceClassification.from_pretrained(model_dir, num_labels=num_labels)
         self.model.eval()
         self.model.cuda()
+        self.model.half()
 
     def get_label_map(self):
         return self.label_map
@@ -115,7 +171,7 @@ class TextclfInferenceService(object):
             if self.tag:
                 preds = (logits.detach().cpu().sigmoid() > thresh).byte().numpy()
             else:
-                _, preds = torch.max(logits.detach().cpu(), 1)
+                _, preds = torch.max(logits.float().detach().cpu(), 1)
                 preds = preds.byte().numpy()[0]
             if parse_label:
                 return self.parse_label(preds)
