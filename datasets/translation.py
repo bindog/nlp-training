@@ -8,6 +8,8 @@ from multiprocessing import Pool, Process, current_process
 import torch
 from torch.utils.data import Dataset, DataLoader
 
+from .lmdb_dataset import LMDBDataset
+
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s %(filename)s %(lineno)d] %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -113,7 +115,7 @@ def split_chunks(filename, grain=10000):
 
 
 class TranslationDataset(torch.utils.data.Dataset):
-    def __init__(self, json_path, tokenizer, max_source_length=1024, max_target_length=56, crosslingual=False):
+    def __init__(self, json_path, tokenizer, max_source_length=1024, max_target_length=1024, crosslingual=False):
         """Initiate Textclf Dataset dataset.
         Arguments:
             json_path: dataset json file
@@ -157,3 +159,28 @@ class TranslationDataset(torch.utils.data.Dataset):
 
     def __len__(self):
         return len(self.all_label_ids)
+
+
+class TranslationDataset_LMDB(LMDBDataset):
+    def __init__(self, lmdb_path, tokenizer, max_source_length=1024, max_target_length=1024, crosslingual=False):
+        logger.info("prepare translation dataset from: " + lmdb_path)
+        super().__init__(lmdb_path)
+        self.tokenizer = tokenizer
+        self.max_source_length = max_source_length
+        self.max_target_length = max_target_length
+        self.crosslingual = crosslingual
+
+    def process(self, json_str):
+        info = json.loads(json_str)
+        raw_text = info["text"]
+        translation_text = info["translation"]
+        src_lang = info["src_lang"]
+        tgt_lang = info["tgt_lang"]
+        batch = self.tokenizer.prepare_seq2seq_batch(
+            raw_text, src_lang=src_lang, tgt_texts=translation_text, tgt_lang=tgt_lang,
+            max_length=self.max_source_length, max_target_length=self.max_target_length, padding="max_length", return_tensors="pt"
+        )
+        return {
+            "input_ids": batch["input_ids"][0],
+            "labels": batch["labels"][0]
+        }

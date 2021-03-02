@@ -34,14 +34,14 @@ def get_label_map(cfg):
     return label_map, num_labels
 
 
-def get_split_path(data_dir, split):
+def get_split_path(data_dir, split, dtype="json"):
     if split == "val" or split == "dev" or split == "valid":
         c_list = ["val", "dev", "valid"]
         for c in c_list:
-            json_path = os.path.join(data_dir, c + ".json")
-            if os.path.exists(json_path):
-                return json_path
-    return os.path.join(data_dir, split + ".json")
+            final_path = os.path.join(data_dir, "{}.{}".format(c, dtype))
+            if os.path.exists(final_path):
+                return final_path
+    return os.path.join(data_dir, "{}.{}".format(split, dtype))
 
 
 def parse_pet_config(cfg):
@@ -66,6 +66,7 @@ def get_dataloader(cfg, tokenizer, num_labels, split, debug=False):
         split = "dev"
 
     json_file = get_split_path(cfg["data"]["data_dir"], split)
+    lmdb_path = get_split_path(cfg["data"]["data_dir"], split, dtype="lmdb")
     if cfg["train"]["task_name"] == "ner":
         from datasets.ner import NERDataset
         label_map_path = os.path.join(cfg["data"]["data_dir"], "label_map")
@@ -82,8 +83,10 @@ def get_dataloader(cfg, tokenizer, num_labels, split, debug=False):
         from datasets.summarization import SummarizationDataset
         dataset = SummarizationDataset(json_file, tokenizer, max_source_length=cfg["data"]["max_src_length"], max_target_length=cfg["data"]["max_tgt_length"])
     elif cfg["train"]["task_name"] == "translation":
-        from datasets.translation import TranslationDataset
-        dataset = TranslationDataset(json_file, tokenizer, max_source_length=cfg["data"]["max_src_length"], max_target_length=cfg["data"]["max_tgt_length"])
+        # from datasets.translation import TranslationDataset
+        # dataset = TranslationDataset(json_file, tokenizer, max_source_length=cfg["data"]["max_src_length"], max_target_length=cfg["data"]["max_tgt_length"])
+        from datasets.translation import TranslationDataset_LMDB
+        dataset = TranslationDataset_LMDB(lmdb_path, tokenizer, max_source_length=cfg["data"]["max_src_length"], max_target_length=cfg["data"]["max_tgt_length"])
     elif cfg["train"]["task_name"] == "pet":
         from datasets.pet import PetDataset
         label_map, num_labels = get_label_map(cfg)
@@ -104,7 +107,7 @@ def get_dataloader(cfg, tokenizer, num_labels, split, debug=False):
                         dataset,
                         batch_size=batch_size,
                         shuffle=shuffle,
-                        num_workers=4,
+                        num_workers=40,
                         sampler=sampler
                     )
     return len(dataset), dataloader
