@@ -1,13 +1,8 @@
 bidict>=0.21.2
-fire>=0.4.0
 filelock>=3.0.12
-lmdb-embeddings>=0.4.0
 packaging>=20.4
-PyYAML>=5.3.1
 requests>=2.24.0
-scikit-learn>=0.23.2
 sentencepiece>=0.1.91
 tokenizers>=0.8.1
 torch==1.7.1+cu110
 tqdm>=4.48.0
-wandb>=0.9.6
