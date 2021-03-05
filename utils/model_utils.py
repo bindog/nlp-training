@@ -154,6 +154,10 @@ def get_tokenizer_and_model(cfg, label_map=None, num_labels=None):
         if cfg["train"]["task_name"] in nlg_tasks:
             from models.modeling_mt5 import MT5ForConditionalGeneration
             model = MT5ForConditionalGeneration.from_pretrained(ptd)
+    elif cfg["train"]["model_name"] == "simple":
+        from models_classic.simple_net import SimpleFC
+        tokenizer = "word2vec"
+        model = SimpleFC(embedding_dim=200, num_labels=num_labels)
     else:
         logger.error("model type not supported!")
 
@@ -176,6 +180,15 @@ def save_model(cfg, tokenizer, model, best=False, epoch=None, step=None):
             sub_dir = "models"
 
     saved_path = os.path.join(cfg["train"]["output_dir"], sub_dir)
-    tokenizer.save_pretrained(saved_path)
-    _model = model.module if hasattr(model, 'module') else model  # handle multi gpu
-    _model.save_pretrained(saved_path)
+    os.makedirs(saved_path, exist_ok=True)
+
+    if hasattr(tokenizer, "save_pretrained"):
+        tokenizer.save_pretrained(saved_path)
+
+    if hasattr(model, "save_pretrained"):
+        model.save_pretrained(saved_path)
+    else:
+        _model = model.module if hasattr(model, 'module') else model  # handle multi gpu
+        state_dict = _model.state_dict()
+        output_model_file = os.path.join(saved_path, "pytorch_model.bin")
+        torch.save(state_dict, output_model_file)

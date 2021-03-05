@@ -73,8 +73,10 @@ def get_dataloader(cfg, tokenizer, num_labels, split, debug=False):
         dataset = NERDataset(json_file, label_map_path, tokenizer, num_labels=num_labels)
     elif cfg["train"]["task_name"] == "textclf":
         longformer = False
-        from datasets.textclf import TextclfDataset
-        dataset = TextclfDataset(json_file, tokenizer, num_labels, cfg["train"]["doc_inner_batch_size"], cfg["data"]["max_seq_length"], cfg["train"]["encode_document"], longformer)
+        # from datasets.textclf import TextclfDataset
+        from datasets.textclf_fast import TextclfDatasetFast
+        lmdb_embedding = "/mnt/dl/public/lmdb_embeddings/tencent_ai"
+        dataset = TextclfDatasetFast(lmdb_path, lmdb_embedding, tokenizer=None, num_labels=num_labels)
     elif cfg["train"]["task_name"] == "tag":
         longformer = False
         from datasets.textclf import TextclfDataset

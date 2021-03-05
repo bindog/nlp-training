@@ -22,6 +22,7 @@ ner | hfl/chinese-roberta-wwm-ext | 65.97 | 64.3 | 65.13
 corpus | model_name | precision | recall | f1-score
 ---- | --------  | ---- | ---- | ----
 tag_zh | huawei/nezha-zh-base | 77.31 | 77.31 | 77.31
+tag_zh | simple(lr=0.1, bs=64) |  87.02 | 85.50 | 85.90
 
 ### 文本标签分类（多分类）
 corpus | model_name | precision | recall | f1-score
