@@ -11,24 +11,28 @@ from concurrent.futures import ProcessPoolExecutor
 
 from tqdm import tqdm
 from LAC import LAC
+from stopwordsiso import stopwords
 
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s %(filename)s %(lineno)d] %(message)s")
 logger = logging.getLogger(__name__)
 
 lac = LAC(mode='seg')
+all_stopwords = stopwords(["en", "zh"])
 
 
 def cut_words(raw_dict):
-    raw_json_dict = json.loads(raw_dict["raw_text"])  # raw json text
+    raw_json_dict = json.loads(raw_dict["raw_json_text"])
     seg_words = lac.run(raw_json_dict["text"])
-    # TODO remove stop words...
-    raw_dict["words"] = seg_words
-    return raw_dict
+    # remove stop words
+    seg_words_clean = [w for w in seg_words if w not in all_stopwords]
+    raw_json_dict["words"] = seg_words_clean
+    return raw_json_dict
 
 
 def create(data_home, split="train", cut=False, num_workers=40):
-    r"""Convert json format training files to LMDB format
+    r"""Convert json format training files to LMDB Database format
+        With the ProcessPoolExecutor we can enjoy the ultimate high speed
 
         Args:
             data_home: json files data home
@@ -47,7 +51,8 @@ def create(data_home, split="train", cut=False, num_workers=40):
         for line in f:
             all_raw_dict[nid] = {
                 "id": nid,
-                "raw_text": line.strip()  # raw json text
+                # leave json parsing into sub-process
+                "raw_json_text": line.strip()
             }
             nid += 1
 
@@ -61,31 +66,25 @@ def create(data_home, split="train", cut=False, num_workers=40):
 
         for nid, raw_dict in all_raw_dict.items():
             future = executor.submit(cut_words, raw_dict)
-            future.add_done_callback(fcallback)
             future_to_nid[future] = nid
+            future.add_done_callback(fcallback)
 
 
-    logger.info("create lmdb database...")
     lmdb_path = os.path.join(data_home, split + ".lmdb")
+    logger.info("Create LMDB Database with path: " + str(lmdb_path))
     env = lmdb.open(lmdb_path, map_size=1 << 40)
-    # lmdb_keys = []
 
     with open(json_path, "r") as f, env.begin(write=True) as txn:
         count = 0
         for nid, raw_dict in all_raw_dict.items():
-            json_str = json.dumps(raw_dict, ensure_ascii=False)
+            serialized_string = pickle.dumps(raw_dict)
             key = "{:08}".format(count)
-            txn.put(key.encode(), json_str.encode())
-            # lmdb_keys.append(key)
+            txn.put(key.encode(), serialized_string)
             count += 1
             if count % 10000 == 0:
-                logger.info("lmdb create processed {:08} lines...".format(count))
+                logger.info("LMDB Database create processed {:08} lines...".format(count))
 
-    # pkl_path = os.path.join(data_home, split + "_keys.pkl")
-    # with open(pkl_path, "wb") as f:
-    #     pickle.dump(lmdb_keys, f)
-
-    logger.info("lmdb create done.")
+    logger.info("LMDB Database create done.")
 
 
 if __name__ == "__main__":

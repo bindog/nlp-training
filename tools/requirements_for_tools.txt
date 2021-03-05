@@ -1,2 +1,3 @@
 gensim
 lac
+stopwordsiso
