@@ -60,6 +60,69 @@ class SummarizationInferenceService(object):
         else:
             return results
 
+
+class SimpleFCTextclfInferenceService(object):
+    def __init__(self, model_dir, lmdb_embeddings_dir, **kwargs):
+        with open(os.path.join(model_dir, "label_map")) as f:
+            label_map = json.loads(f.read().strip())
+            self.label_map = {int(k):v for k, v in label_map.items()}
+        num_labels = len(self.label_map)
+
+        from lmdb_embeddings.reader import LruCachedLmdbEmbeddingsReader
+        self.embeddings = LruCachedLmdbEmbeddingsReader(lmdb_embeddings_dir)
+
+        from models_classic.simple_net import SimpleFC
+        model_weight_path = os.path.join(model_dir, "best_models", "pytorch_model.bin")
+        self.model = SimpleFC(200, num_labels)
+        self.model.load_state_dict(torch.load(model_weight_path))
+
+        self.model.eval()
+        self.model.cuda()
+
+    def get_label_map(self):
+        return self.label_map
+
+    def word_embedding_mean(self, word_list):
+        all_word_tensors = []
+        for word in word_list:
+            try:
+                vector = self.embeddings.get_word_vector(word)
+                word_tensor = torch.tensor(vector, dtype=torch.float32)
+                all_word_tensors.append(word_tensor)
+            except:
+                pass
+        return torch.mean(torch.stack(all_word_tensors), axis=0)
+
+    def input_preprocess(self, text, batch=False):
+        if batch:
+            tensor_list = []
+            for word_list in text:
+                t = self.word_embedding_mean(word_list)
+                tensor_list.append(t)
+            return {
+                "input_embeddings": torch.stack(tensor_list)
+            }
+        else:
+            input_tensor = self.word_embedding_mean(text).unsqueeze(0)
+            return {
+                "input_embeddings": input_tensor
+            }
+
+    def parse_label(self, preds, batch=False):
+        text_labels = [self.label_map[p] for p in preds]
+        return text_labels if batch else text_labels[0]
+
+    def inference(self, text, batch=False):
+        # batch inference
+        inputs_dict = self.input_preprocess(text, batch)
+        with torch.no_grad():
+            _inputs = {k: t.cuda() for k, t in inputs_dict.items()}
+            outputs = self.model(**_inputs)
+        _, preds = torch.max(outputs.detach().cpu(), 1)
+        preds = preds.byte().numpy().tolist()
+        return self.parse_label(preds, batch)
+
+
 class BertTextclfInferenceService(object):
     def __init__(self, model_dir, **kwargs):
         with open(os.path.join(model_dir, "label_map")) as f:
