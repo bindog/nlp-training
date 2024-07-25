@@ -4,5 +4,5 @@ packaging>=20.4
 requests>=2.24.0
 sentencepiece>=0.1.91
 tokenizers>=0.8.1
-torch==1.7.1+cu110
+torch==2.2.0
 tqdm>=4.48.0
